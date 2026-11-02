@@ -116,6 +116,7 @@ jobs:
           }
           if ($failed) { exit 1 }
           Write-Host "空目录冒烟通过：无 Traceback，退出码符合 {0,1}"
+          exit 0
 
       - name: 夹具自测（六层 + 幂等 + 还原，全程在临时目录）
         shell: pwsh
@@ -125,6 +126,7 @@ jobs:
         run: |
           python tests/selftest.py
           if ($LASTEXITCODE -ne 0) { Write-Error "tests/selftest.py 未通过"; exit 1 }
+          exit 0
 
       - name: 发布物料自检
         shell: pwsh
@@ -216,6 +218,7 @@ jobs:
             python tests/selftest.py
             if ($LASTEXITCODE -ne 0) { Write-Error "$e 未通过夹具自测"; exit 1 }
           }
+          exit 0
 
       - name: 面板自测（起服务 -> 打自己的 API -> 退出）
         shell: pwsh
@@ -225,6 +228,7 @@ jobs:
         run: |
           & dist\wbpojia.exe panel --self-test --no-browser
           if ($LASTEXITCODE -ne 0) { Write-Error "面板自测失败"; exit 1 }
+          exit 0
 
       - name: 打发布包
         shell: pwsh
