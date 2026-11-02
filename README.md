@@ -1,5 +1,10 @@
 # WorkBuddy 破甲 CLI · wbpojia
 
+[![CI](https://github.com/Elysia-SHY/wbpojia/actions/workflows/ci.yml/badge.svg)](https://github.com/Elysia-SHY/wbpojia/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/Elysia-SHY/wbpojia?display_name=tag)](https://github.com/Elysia-SHY/wbpojia/releases/latest)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+
+
 **English (short)** · full document in Chinese: [README.zh.md](README.zh.md) ← 中文全文（主文档）
 
 A single-file, zero-dependency command line tool for the **WorkBuddy desktop client** (Electron). It does exactly two things, locally, on your own machine:

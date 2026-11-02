@@ -1,5 +1,10 @@
 # WorkBuddy 破甲 CLI · wbpojia
 
+[![CI](https://github.com/Elysia-SHY/wbpojia/actions/workflows/ci.yml/badge.svg)](https://github.com/Elysia-SHY/wbpojia/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/Elysia-SHY/wbpojia?display_name=tag)](https://github.com/Elysia-SHY/wbpojia/releases/latest)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+
+
 [English (short)](README.md) · **中文全文（本页）**
 
 `wbpojia.py` 是一个**单文件、零第三方依赖**的本地命令行工具，只针对 WorkBuddy 桌面客户端（Electron 壳）做两件事：
