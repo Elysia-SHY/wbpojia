@@ -1,0 +1,244 @@
+name: CI
+
+on:
+  push:
+    branches: [ main, master ]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # 1) 定位单文件引擎，确定它在仓库根目录
+  # 2) 语法编译：三套 Python 都能编译通过
+  # 3) --help 契约：v2.0 冻结的 11 个命令一个都不能少（含面板 panel）
+  # 4) 空目录冒烟：-i/-d 指向临时空目录，要求「优雅报错」而不是抛异常
+  # 5) 发布物料：九个文件都在，LICENSE 保留上游版权行，仓库里没有本机绝对路径
+  build:
+    name: py${{ matrix.python }} · windows
+    runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python: [ "3.9", "3.11", "3.12" ]
+
+    steps:
+      - name: 检出
+        uses: actions/checkout@v4
+
+      - name: 安装 Python ${{ matrix.python }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+
+      - name: 定位单文件引擎
+        shell: pwsh
+        run: |
+          # 发布名以 wbpojia.py 为准，同时兼容 pojia-wb.py 的历史命名
+          $engine = $null
+          foreach ($cand in @("wbpojia.py", "pojia-wb.py")) {
+            if (Test-Path -LiteralPath $cand -PathType Leaf) { $engine = $cand; break }
+          }
+          if (-not $engine) {
+            Write-Error "仓库根目录缺少单文件引擎（wbpojia.py 或 pojia-wb.py）"
+            exit 1
+          }
+          Get-Item -LiteralPath $engine | Select-Object Name, Length
+          "ENGINE=$engine" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          Write-Host "ENGINE=$engine"
+
+      - name: 语法编译
+        shell: pwsh
+        run: |
+          python -m py_compile $env:ENGINE
+          python -c "import ast,sys; ast.parse(open(sys.argv[1],encoding='utf-8').read()); print('ast ok:', sys.argv[1])" $env:ENGINE
+
+      - name: "--help 命令契约"
+        shell: pwsh
+        env:
+          PYTHONUTF8: "1"
+          PYTHONIOENCODING: utf-8
+        run: |
+          $help = (& python $env:ENGINE --help 2>&1 | Out-String)
+          Write-Host $help
+          if ($LASTEXITCODE -ne 0) { Write-Error "--help 退出码非 0"; exit 1 }
+          $missing = @()
+          foreach ($cmd in @("status","check","doctor","apply","revert","cloudmem","guard-install","guard-remove","menu","onekey","panel")) {
+            if ($help -notmatch [regex]::Escape($cmd)) { $missing += $cmd }
+          }
+          if ($missing.Count -gt 0) {
+            Write-Error ("--help 未列出命令: " + ($missing -join ", "))
+            exit 1
+          }
+          Write-Host ("契约通过：v2.0 的 {0} 个命令齐全" -f 11)
+
+      - name: 空目录冒烟（不接触真实安装目录）
+        shell: pwsh
+        env:
+          PYTHONUTF8: "1"
+          PYTHONIOENCODING: utf-8
+        run: |
+          $root = Join-Path $env:RUNNER_TEMP "pojia-empty"
+          $inst = Join-Path $root "install"
+          $data = Join-Path $root "data"
+          New-Item -ItemType Directory -Force -Path $inst, $data | Out-Null
+
+          $failed = $false
+          foreach ($argv in @(
+              @("apply","--dry-run"),
+              @("check"),
+              @("status")
+          )) {
+            $label = ($argv -join " ")
+            $out = (& python $env:ENGINE @argv -i $inst -d $data 2>&1 | Out-String)
+            $code = $LASTEXITCODE
+            Write-Host "---- $label (exit $code) ----"
+            Write-Host $out
+
+            if ($out -match "Traceback \(most recent call last\)") {
+              Write-Error "[$label] 空目录下抛了未捕获异常，应当优雅报错"
+              $failed = $true
+            }
+            if (-not ($out.Trim())) {
+              Write-Error "[$label] 没有任何输出"
+              $failed = $true
+            }
+            # 空目录允许 0（跳过）或 1（明确报错）；其它退出码视为契约破坏
+            if ($code -notin @(0, 1)) {
+              Write-Error "[$label] 退出码 $code 不在允许集合 {0,1}"
+              $failed = $true
+            }
+          }
+          if ($failed) { exit 1 }
+          Write-Host "空目录冒烟通过：无 Traceback，退出码符合 {0,1}"
+
+      - name: 夹具自测（六层 + 幂等 + 还原，全程在临时目录）
+        shell: pwsh
+        env:
+          PYTHONUTF8: "1"
+          PYTHONIOENCODING: utf-8
+        run: |
+          python tests/selftest.py
+          if ($LASTEXITCODE -ne 0) { Write-Error "tests/selftest.py 未通过"; exit 1 }
+
+      - name: 发布物料自检
+        shell: pwsh
+        run: |
+          $required = @(
+            "README.md","README.zh.md","LICENSE","NOTICE","CHANGELOG.md",
+            ".gitignore",".github/workflows/ci.yml","persona.example.md","docs/upstream.md",
+            "wbpojia.py","破甲.bat","破甲菜单.bat","破甲面板.bat","自检.bat",
+            "tests/selftest.py","build-exe.ps1","docs/panel.png","docs/rea-workbuddy.md"
+          )
+          $missing = @()
+          foreach ($f in $required) {
+            if (-not (Test-Path -LiteralPath $f -PathType Leaf)) { $missing += $f }
+          }
+          if ($missing.Count -gt 0) {
+            Write-Error ("缺少发布物料: " + ($missing -join ", "))
+            exit 1
+          }
+
+          $lic = Get-Content -LiteralPath "LICENSE" -Raw -Encoding UTF8
+          if ($lic -notmatch "MIT License") { Write-Error "LICENSE 不是 MIT"; exit 1 }
+          if ($lic -notmatch "z91772524-ai") { Write-Error "LICENSE 丢了上游版权行（MIT 强制保留）"; exit 1 }
+
+          $notice = Get-Content -LiteralPath "NOTICE" -Raw -Encoding UTF8
+          if ($notice -notmatch "pojia-next") { Write-Error "NOTICE 未写派生关系与上游链接"; exit 1 }
+
+          $ignore = Get-Content -LiteralPath ".gitignore" -Raw -Encoding UTF8
+          foreach ($p in @("__pycache__/","*.pyc","_wb状态/","*.unlockbak","*.pojia.bak",".venv/")) {
+            if (-not $ignore.Contains($p)) { Write-Error "gitignore 缺少规则: $p"; exit 1 }
+          }
+          Write-Host "发布物料自检通过"
+
+      - name: 仓库内不得出现本机绝对路径
+        shell: pwsh
+        run: |
+          # 只检查 git 跟踪的文件：运行时产物（_wb状态/ 等）本就不该进仓，也不该让它们干扰判断
+          $tracked = @(git ls-files)
+          if ($LASTEXITCODE -ne 0 -or $tracked.Count -eq 0) {
+            $tracked = @(Get-ChildItem -Recurse -File -Force |
+              Where-Object { $_.FullName -notmatch "[\\/]\.git[\\/]" } |
+              ForEach-Object { $_.FullName })
+          }
+          $hits = @()
+          foreach ($f in $tracked) {
+            if (-not (Test-Path -LiteralPath $f -PathType Leaf)) { continue }
+            $m = Select-String -LiteralPath $f -Pattern '[A-Za-z]:\\Users\\[^<\\]', '[A-Za-z]:\\Desktop\\' -ErrorAction SilentlyContinue
+            if ($m) { $hits += $m }
+          }
+          if ($hits.Count -gt 0) {
+            $hits | ForEach-Object { Write-Host ("{0}:{1}: {2}" -f $_.Path, $_.LineNumber, $_.Line.Trim()) }
+            Write-Error '发现本机绝对路径，请改成占位符（如 C:\Users\<you>\.workbuddy）'
+            exit 1
+          }
+          Write-Host ("未发现本机绝对路径（检查了 {0} 个文件）" -f $tracked.Count)
+
+  exe:
+    name: 打包单文件 exe
+    runs-on: windows-latest
+    steps:
+      - name: 检出
+        uses: actions/checkout@v4
+
+      - name: 安装 Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: 构建 exe（控制台 + 无窗口面板版）
+        shell: pwsh
+        run: |
+          .\build-exe.ps1
+          if ($LASTEXITCODE -ne 0) { Write-Error "build-exe.ps1 失败"; exit 1 }
+          .\build-exe.ps1 -Panel
+          if ($LASTEXITCODE -ne 0) { Write-Error "build-exe.ps1 -Panel 失败"; exit 1 }
+          foreach ($f in @("dist\wbpojia.exe", "dist\wbpojia-panel.exe")) {
+            if (-not (Test-Path -LiteralPath $f)) { Write-Error "没有产出 $f"; exit 1 }
+            Get-Item -LiteralPath $f | Select-Object Name, Length
+          }
+
+      - name: 用同一套夹具自测两个 exe
+        shell: pwsh
+        env:
+          PYTHONUTF8: "1"
+          PYTHONIOENCODING: utf-8
+        run: |
+          foreach ($e in @("dist\wbpojia.exe", "dist\wbpojia-panel.exe")) {
+            Write-Host "==== 自测 $e ===="
+            $env:WBPOJIA_ENGINE = $e
+            python tests/selftest.py
+            if ($LASTEXITCODE -ne 0) { Write-Error "$e 未通过夹具自测"; exit 1 }
+          }
+
+      - name: 面板自测（起服务 -> 打自己的 API -> 退出）
+        shell: pwsh
+        env:
+          PYTHONUTF8: "1"
+          PYTHONIOENCODING: utf-8
+        run: |
+          & dist\wbpojia.exe panel --self-test --no-browser
+          if ($LASTEXITCODE -ne 0) { Write-Error "面板自测失败"; exit 1 }
+
+      - name: 打发布包
+        shell: pwsh
+        run: |
+          $stage = "dist\stage"
+          New-Item -ItemType Directory -Force -Path $stage | Out-Null
+          Copy-Item dist\wbpojia.exe, dist\wbpojia-panel.exe $stage
+          Copy-Item 破甲.bat, 破甲菜单.bat, 破甲面板.bat, 自检.bat, README.zh.md, LICENSE, NOTICE, persona.example.md, wbpojia.py, build-exe.ps1 $stage
+          Compress-Archive -Path "$stage\*" -DestinationPath "dist\wbpojia-v2.0-win64.zip" -Force
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wbpojia-v2.0-win64
+          path: |
+            dist/wbpojia.exe
+            dist/wbpojia-panel.exe
+            dist/wbpojia-v2.0-win64.zip

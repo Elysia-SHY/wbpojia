@@ -1,0 +1,67 @@
+# ── Python ────────────────────────────────────────────────
+__pycache__/
+*.pyc
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+dist/
+*.egg-info/
+.venv/
+venv/
+env/
+.python-version
+
+# ── 本工具运行时状态（含本机路径、时间戳、文件清单）─────
+_wb状态/
+*passport.json
+手动指定目录.json
+
+# ── 备份与还原残留 ───────────────────────────────────────
+*.unlockbak
+*.pojia.bak
+*.bak
+*.bak-*
+*.orig
+*.rej
+*.swp
+*~
+
+# ── 任何包含本机绝对路径的产物 ───────────────────────────
+# 本项目不接受任何写入真实路径的日志/报告/副本：
+# 提交前请确认这些文件里没有「盘符 + 用户目录 / 桌面目录」这类绝对路径。
+# 文档里的示例一律用占位符，例如 <USERPROFILE> 或 <盘符>:<某目录>。
+*.log
+logs/
+*.tmp
+*.temp
+*.dump
+*.trace
+*_paths.json
+*_paths.txt
+paths*.json
+paths*.txt
+wb-report*.json
+wb-report*.txt
+wb-state*.json
+
+# ── 个人人格文件（保留示例，忽略实例）───────────────────
+persona.md
+my-prompt.txt
+persona.local.md
+
+# ── 编辑器与系统 ─────────────────────────────────────────
+.vscode/
+.idea/
+*.code-workspace
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# ── 打包产物 ─────────────────────────────────────────────
+*.exe
+*.zip
+*.7z
+*.tar.gz
+.venv-build/
