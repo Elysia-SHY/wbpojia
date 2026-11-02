@@ -421,3 +421,24 @@ bat 找不到 Python 时本该停住并提示（见第 4 节）；如果你看�
 ## 15. 许可
 
 MIT。见 [LICENSE](LICENSE)。上游 [pojia-next](https://github.com/z91772524-ai/pojia-next) 同为 MIT，其版权声明已一并保留。
+
+---
+
+## 16. 发版流程（维护者）
+
+打 tag 就会自动发 Release，不用手工传附件：
+
+```bash
+git tag -a v2.1.0 -m "wbpojia v2.1.0"
+git push origin v2.1.0
+```
+
+`.github/workflows/release.yml` 在 tag 推上来之后会：
+
+1. `build-exe.ps1` + `build-exe.ps1 -Panel` 各打一个 exe；
+2. 两个 exe 都跑一遍 `tests/selftest.py`（不通过就不发）；
+3. 打 `wbpojia-<tag>-win64.zip` + 生成 `SHA256SUMS.txt`；
+4. `gh release create`（不存在时）或 `gh release upload --clobber`（已存在时），附件固定是：两个 exe、zip、校验和。
+
+Release 正文：`docs/release-notes/<tag>.md` 存在就用它，否则用 GitHub 自动生成的 notes（提交与 PR 列表）。
+想在已存在的 tag 上重发一次，去 Actions 手动跑 `Release` workflow 并填 tag 即可（会覆盖同名附件、不会动 tag）。

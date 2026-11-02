@@ -177,3 +177,15 @@ directory, so a client update or plugin reinstall re-materialises pristine `.tpl
 ## License
 
 MIT — see [LICENSE](LICENSE). Upstream [pojia-next](https://github.com/z91772524-ai/pojia-next) is MIT as well; its copyright notice is retained.
+
+---
+
+## Releasing
+
+Push a tag — CI does the rest:
+
+```bash
+git tag -a v2.1.0 -m "wbpojia v2.1.0" && git push origin v2.1.0
+```
+
+`.github/workflows/release.yml` builds both exes, runs `tests/selftest.py` against each, packs `wbpojia-<tag>-win64.zip` with `SHA256SUMS.txt`, and creates or updates the GitHub Release. Release notes come from `docs/release-notes/<tag>.md` when present, otherwise from GitHub's generated notes.

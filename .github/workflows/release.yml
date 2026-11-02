@@ -1,0 +1,120 @@
+name: Release
+
+on:
+  push:
+    tags: [ "v*" ]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "要发布的 tag（例如 v2.0.0）"
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    name: 打包并发布 Release
+    runs-on: windows-latest
+    steps:
+      - name: 检出
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: 安装 Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: 解析 tag
+        id: tag
+        shell: pwsh
+        run: |
+          $tag = "${{ inputs.tag }}"
+          if (-not $tag) { $tag = "${{ github.ref_name }}" }
+          if ($tag -notmatch '^v\d+\.\d+\.\d+') { Write-Error "tag 不像版本号：$tag"; exit 1 }
+          "tag=$tag" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+          Write-Host "发布 tag：$tag"
+
+      - name: 构建两个 exe
+        shell: pwsh
+        run: |
+          .\build-exe.ps1
+          if ($LASTEXITCODE -ne 0) { Write-Error "build-exe.ps1 失败"; exit 1 }
+          .\build-exe.ps1 -Panel
+          if ($LASTEXITCODE -ne 0) { Write-Error "build-exe.ps1 -Panel 失败"; exit 1 }
+          foreach ($f in @("dist\wbpojia.exe", "dist\wbpojia-panel.exe")) {
+            if (-not (Test-Path -LiteralPath $f)) { Write-Error "没有产出 $f"; exit 1 }
+            Get-Item -LiteralPath $f | Select-Object Name, Length
+          }
+
+      - name: 两个 exe 都跑夹具自测
+        shell: pwsh
+        env:
+          PYTHONUTF8: "1"
+          PYTHONIOENCODING: utf-8
+        run: |
+          foreach ($e in @("dist\wbpojia.exe", "dist\wbpojia-panel.exe")) {
+            Write-Host "==== 自测 $e ===="
+            $env:WBPOJIA_ENGINE = $e
+            python tests/selftest.py
+            if ($LASTEXITCODE -ne 0) { Write-Error "$e 未通过夹具自测"; exit 1 }
+          }
+          exit 0
+
+      - name: 打发布包 + 校验和
+        shell: pwsh
+        run: |
+          $stage = "dist\stage"
+          New-Item -ItemType Directory -Force -Path $stage | Out-Null
+          Copy-Item dist\wbpojia.exe, dist\wbpojia-panel.exe $stage
+          Copy-Item 破甲.bat, 破甲菜单.bat, 破甲面板.bat, 自检.bat, README.zh.md, LICENSE, NOTICE, persona.example.md, wbpojia.py, build-exe.ps1, CHANGELOG.md $stage
+          $zip = "dist\wbpojia-${{ steps.tag.outputs.tag }}-win64.zip"
+          Compress-Archive -Path "$stage\*" -DestinationPath $zip -Force
+          Remove-Item -Recurse -Force $stage
+
+          $lines = @("# wbpojia ${{ steps.tag.outputs.tag }}")
+          foreach ($f in @("dist\wbpojia.exe", "dist\wbpojia-panel.exe", $zip)) {
+            $h = (Get-FileHash -Algorithm SHA256 -LiteralPath $f).Hash.ToLower()
+            $lines += "$h  $(Split-Path -Leaf $f)"
+          }
+          $lines | Set-Content -LiteralPath "dist\SHA256SUMS.txt" -Encoding utf8
+          Get-Content -LiteralPath "dist\SHA256SUMS.txt"
+          exit 0
+
+      - name: 发 Release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ steps.tag.outputs.tag }}
+        run: |
+          $notes = "docs/release-notes/$env:TAG.md"
+          $exists = $false
+          gh release view $env:TAG --json tagName 2>&1 | Out-Null
+          if ($LASTEXITCODE -eq 0) { $exists = $true }
+
+          $files = @("dist\wbpojia.exe", "dist\wbpojia-panel.exe", "dist\wbpojia-$env:TAG-win64.zip", "dist\SHA256SUMS.txt")
+
+          if ($exists) {
+            Write-Host "Release $env:TAG 已存在，覆盖附件"
+            gh release upload $env:TAG @files --clobber
+            if ($LASTEXITCODE -ne 0) { Write-Error "上传附件失败"; exit 1 }
+            if (Test-Path -LiteralPath $notes) {
+              gh release edit $env:TAG --notes-file $notes
+            }
+          } else {
+            if (Test-Path -LiteralPath $notes) {
+              gh release create $env:TAG @files --title "wbpojia $env:TAG" --notes-file $notes --latest
+            } else {
+              gh release create $env:TAG @files --title "wbpojia $env:TAG" --generate-notes --latest
+            }
+            if ($LASTEXITCODE -ne 0) { Write-Error "创建 Release 失败"; exit 1 }
+          }
+          gh release view $env:TAG --json url,assets --jq '{url: .url, assets: [.assets[].name]}'
+          exit 0
