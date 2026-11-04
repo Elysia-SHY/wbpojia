@@ -42,7 +42,7 @@ scoop which wbpojia    # 指向 scoop\shims\wbpojia.exe
 
 ## 2. 装完先干什么
 
-Scoop 只负责把 exe 放到盘上，**不会**替你打补丁。补丁要显式跑一次：
+Scoop 只负责把 exe 放到盘上，不会替你打补丁。补丁要显式跑一次：
 
 ```powershell
 wbpojia doctor            # 只读自检：目录探测、写入权限、闸门与备份状态
@@ -69,8 +69,8 @@ scoop update wbpojia   # 只更它
 
 两个跟升级有关的实情：
 
-- `scoop` 升级是**换掉整个 `apps\wbpojia\current\` 目录**。引擎的状态目录 `_wb状态\`（记住的 `-i/-d` 路径、护照、人格哈希）跟 exe 同目录，所以升级后这些会回到初始状态——重新跑 `wbpojia apply -i "<安装根>" -d "<数据目录>" --save-path` 一次即可。
-- 人格文件同理：`wbpojia persona set "<文本>"` 把内容写到 exe 同目录的 `persona.md`（scoop 目录用户可写，所以写在那里，而**不是** `%LOCALAPPDATA%`——那个落点只在 exe 放不进安装目录时才用）。升级会替换它。三种保法任选：
+- `scoop` 升级是**换掉整个 `apps\wbpojia\current\` 目录**。引擎的状态目录 `_wb状态\`（记住的 `-i/-d` 路径、护照、人格哈希）跟 exe 同目录，所以升级后这些会回到初始状态，重新跑 `wbpojia apply -i "<安装根>" -d "<数据目录>" --save-path` 一次即可。
+- 人格文件同理：`wbpojia persona set "<文本>"` 把内容写到 exe 同目录的 `persona.md`（scoop 目录用户可写，所以写在那里，而不是 `%LOCALAPPDATA%`，那个落点只在 exe 放不进安装目录时才用）。升级会替换它。三种保法任选：
 
   - **给清单加 `persist`**（省事，推荐）：
 
@@ -80,13 +80,13 @@ scoop update wbpojia   # 只更它
 
     改完重新 `scoop uninstall wbpojia` + `scoop install wbpojia` 生效；之后升级就不会动这两样。
   - 升级后重跑一次 `wbpojia persona set "<文本>"`（文本自己留一份）。
-  - 或者每次显式带上 `-p`：`wbpojia apply -p D:\tools\my-persona.md`——`--persona` 优先级最高且不落盘。
+  - 或者每次显式带上 `-p`：`wbpojia apply -p D:\tools\my-persona.md`，`--persona` 优先级最高且不落盘。
 
 ---
 
 ## 4. 卸载
 
-顺序别反——先摘自愈任务，再还原文件，最后才是 scoop：
+顺序别反，先摘自愈任务，再还原文件，最后才是 scoop：
 
 ```powershell
 wbpojia guard-remove     # 删两条计划任务（含历史旧任务名），需要管理员终端
@@ -128,7 +128,7 @@ curl.exe -L -o "$env:TEMP\wbpojia-v2.1.0-win64.zip" "https://github.com/Elysia-S
 - `architecture.64bit.url` 里的两处 `2.1.0`
 - `architecture.64bit.hash`
 
-`checkver` 用 GitHub releases 取最新 tag（本仓库 tag 形如 `v2.1.0`，Scoop 会自动去掉 `v`），`autoupdate` 负责自动拼新 URL——建了 bucket 之后 `scoop update` 就能跟上，不需要手改。
+`checkver` 用 GitHub releases 取最新 tag（本仓库 tag 形如 `v2.1.0`，Scoop 会自动去掉 `v`），`autoupdate` 负责自动拼新 URL，建了 bucket 之后 `scoop update` 就能跟上，不需要手改。
 
 ### 5.3 换 sha 之后它说缓存还是旧的
 
