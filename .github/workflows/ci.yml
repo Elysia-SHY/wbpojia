@@ -16,7 +16,7 @@ concurrency:
 jobs:
   # 1) 定位单文件引擎，确定它在仓库根目录
   # 2) 语法编译：三套 Python 都能编译通过
-  # 3) --help 契约：v2.0 冻结的 11 个命令一个都不能少（含面板 panel）
+  # 3) --help 契约：v2.1 冻结的 12 个命令一个都不能少（含 panel / persona）
   # 4) 空目录冒烟：-i/-d 指向临时空目录，要求「优雅报错」而不是抛异常
   # 5) 发布物料：九个文件都在，LICENSE 保留上游版权行，仓库里没有本机绝对路径
   build:
@@ -68,14 +68,14 @@ jobs:
           Write-Host $help
           if ($LASTEXITCODE -ne 0) { Write-Error "--help 退出码非 0"; exit 1 }
           $missing = @()
-          foreach ($cmd in @("status","check","doctor","apply","revert","cloudmem","guard-install","guard-remove","menu","onekey","panel")) {
+          foreach ($cmd in @("status","check","doctor","apply","revert","cloudmem","guard-install","guard-remove","menu","onekey","panel","persona")) {
             if ($help -notmatch [regex]::Escape($cmd)) { $missing += $cmd }
           }
           if ($missing.Count -gt 0) {
             Write-Error ("--help 未列出命令: " + ($missing -join ", "))
             exit 1
           }
-          Write-Host ("契约通过：v2.0 的 {0} 个命令齐全" -f 11)
+          Write-Host ("契约通过：v2.1 的 {0} 个命令齐全" -f 12)
 
       - name: 空目录冒烟（不接触真实安装目录）
         shell: pwsh

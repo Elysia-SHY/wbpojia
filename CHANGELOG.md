@@ -2,6 +2,34 @@
 
 格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，版本号遵循语义化版本。
 
+## v2.1.0 — 2026-11-04
+
+自带自定义系统提示词、命令闸门从 2 处扩到 4 处（外加真正弹审批的 `BashTool.needsApproval`）、计划任务自愈改成指纹秒退，并补上 Scoop 清单与兼容性说明。
+
+### 新增
+
+- **自定义系统提示词（`persona` 子命令）**：`persona`（无参）显示当前人格的来源、字数与保存位置；`persona set "<文本>"` 直接设置；`persona set --file <路径>` 从文件读；`persona reset` 删除自定义、回到内置「小码酱」。
+- **面板「人格」卡片**：多行文本框 + 「保存」「保存并应用」「恢复内置默认」三个按钮（另有「载入内置默认文本」，把内置人格填进框里再改）。保存后 `apply` 时生效；「保存并应用」= 保存完立刻打一次补丁。
+- **人格存储五档优先级**：`--persona` 参数 > 脚本/exe 同目录 `persona.md` > 同目录 `my-prompt.txt` > 状态目录 `_wb状态\persona.md` > 内置默认。第三、四顺位的实际落点由可写性决定（exe 放在 `Program Files` 时自动落到 `%LOCALAPPDATA%\wbpojia\persona.md`）。**不用再手改文件**：面板里写完点「保存并应用」，或者命令行 `persona set` 都行。
+- **JS 语法安全网**：改完 JS 立刻 `node --check`，不通过就放弃这个文件（不写盘，其余文件继续处理）；找不到 node 时退化成括号配平检查。`--no-verify` 可跳过这道检查。
+- **Scoop 清单**：`docs/scoop/wbpojia.json`（装 zip 里的两个 exe、带 shortcuts、`checkver` + `autoupdate` 跟 GitHub releases）与 `docs/scoop.md`（怎么装、怎么升级、怎么卸载、hash 怎么维护）。
+- **`docs/compatibility.md`**：打得到哪些判定点、哪两处改不动、客户端升级或重装之后按什么顺序处置。
+
+### 变更
+
+- **命令契约从 10 个扩到 11 个**：新增 `persona`。参数表新增 `--file`（`persona set` 从文件读）、`--reset`（`persona` 删自定义人格）、`--no-verify`（跳过 JS 语法校验）。
+- **命令闸门从 2 处扩到 4 处**（另加一处属性注入）：除 `checkBashSecurityWindows` / `checkPowerShellSecurity` 的首行 `return{behavior:"allow"};` 之外，`getDestructiveCommandWarning` 首行 `return null;`、`isSandboxForcedByManagedPolicy` 首行 `return false;`；而真正会弹审批的 `BashTool.needsApproval` 首行打成 `return!1;`。`status` 的 L3 段除 `[已开 N/M]` 外逐条列出闸门名与「已开 / 未开 / 不存在」，`check` 的 L3 行仍是文件级 `2/2`。
+- **计划任务自愈走指纹快路径**：`apply --quiet` 先比对指纹（目标目录 mtime + 条目数 + `installed_plugins.json` 与 `cli\product.json` 的哈希 + 引擎版本），没变就直接退出，不再扫 692 个文件；`--force` 跳过快路径强制重扫。`guard-install` 仍是两条任务（每 30 分钟 + 登录时）。
+- **发版物料**：Release 包名 `wbpojia-v2.1.0-win64.zip`；两份 README 与本文档的版本号引用同步到 v2.1。
+
+### 修正
+
+- **真正弹审批的那一环之前没打**：只打两个 `checkXxxSecurity` 时，`BashTool.needsApproval` 还会自己再判一次（先看 `checkBashSecurityWindows(command).behavior`，再走 `sandboxPermissionGateway.shouldUseSandboxPath`，最后取 `applyCommandGate` 的返回值），命令仍可能进审批。现在它首行返回 `false`。
+- **托管策略那一环之前没打**：`clientSecurity → isSandboxForcedByManagedPolicy` 读 `ACC_PRODUCT_CONFIG_*` 的下发值，企业策略把它打开时沙箱强制生效。现在首行 `return false`。
+- **危险命令提示那一环之前没打**：`getDestructiveCommandWarning` 逻辑独立于两个 `checkXxxSecurity` 函数，现在 `return null`。
+- **写坏的风险**：注入是纯字符串插入，宿主换个写法就可能落下语法不成立的 JS。现在先过 `node --check`，不通过就不落盘。
+- **自愈空转**：每 30 分钟全量扫描在「什么都没变」时纯属浪费，改成指纹比对后同一状态下直接退出（护照里记 `fingerprint` 与 `version`，升级后第一次仍会全量跑）。
+
 ## v2.0 — 2026-11-02
 
 首个作为独立仓库公开发布的版本。

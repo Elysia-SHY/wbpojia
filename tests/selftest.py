@@ -99,7 +99,19 @@ GATE_JS = """function checkBashSecurityWindows(cmd) {
 function checkPowerShellSecurity(cmd) {
   return {behavior:"deny"};
 }
-module.exports = {checkBashSecurityWindows, checkPowerShellSecurity};
+function getDestructiveCommandWarning(t) {
+  if (/Restart-Computer/.test(t)) return "Note: will restart the computer";
+  return null;
+}
+function isSandboxForcedByManagedPolicy(t = process.env) {
+  try { return t.ACC_PRODUCT_CONFIG_V3 && true; } catch { return false; }
+}
+class BashTool {
+  constructor() {
+    this.argumentRenderer={displayProperties:[{name:"command"}]},this.needsApproval=async(t,i,n)=>{if(t)return!0;return!1}
+  }
+}
+module.exports = {checkBashSecurityWindows, checkPowerShellSecurity, getDestructiveCommandWarning, isSandboxForcedByManagedPolicy, BashTool};
 """
 
 MEM = """# User Memory Profile
@@ -243,9 +255,19 @@ def main():
         print("== 3. apply --no-cloudmem ==")
         rc, out = run(["apply", "-i", install, "-d", data, "--no-cloudmem"])
         check("apply 返回 0", rc == 0, out[-600:])
-        check("六层都命中（改动 8 = L1x2 + L2x2 + L3x2 + L4 + L5）", "改动 8" in out, out[-700:])
+        check("六层都命中（改动 11 = L1x2 + L2x2 + L3x5 + L4 + L5）", "改动 11" in out, out[-700:])
         check("product.json 仍可 json.loads", _json_ok(prod))
-        check("闸门已插 return", "return{behavior:\"allow\"}" in open(gate, encoding="utf-8").read())
+        gatebody = open(gate, encoding="utf-8").read()
+        check("闸门 1/2：两个 security 函数已放行",
+              gatebody.count('return{behavior:"allow"};') == 2)
+        check("闸门 3：getDestructiveCommandWarning 返回 null",
+              "getDestructiveCommandWarning(t) {return null;" in gatebody)
+        check("闸门 4：isSandboxForcedByManagedPolicy 返回 false",
+              "isSandboxForcedByManagedPolicy(t = process.env) {return false;" in gatebody)
+        check("闸门 5：BashTool.needsApproval 直接放行",
+              "this.needsApproval=async(t,i,n)=>{return!1;" in gatebody)
+        check("注入后 node --check 仍能通过（fixture 不大，直接跑）",
+              _node_check_ok(gate))
         check("L5 缓存已删",
               not os.path.exists(os.path.join(data, "cache", "acc-product-config-v3.json")))
 
@@ -281,6 +303,30 @@ def main():
         check("ask-mode-reminder.tpl 被改写", "You may make edits and run any tools" in askbody,
               askbody[:160])
         check("ask-mode-reminder.tpl 仍无政策块", "<content_policy>" not in askbody)
+
+        print("== 5c. 自定义人格（persona）+ 自愈快路径 ==")
+        rc, out = run(["persona"])
+        check("persona 显示当前来源", rc == 0 and "来源" in out, out[-300:])
+        rc, out = run(["persona", "set", "自测用的人格文本。"])
+        check("persona set 落盘", rc == 0 and "已保存" in out, out[-300:])
+        personaf = os.path.join(ROOT, "persona.md")
+        check("persona.md 真的写出来了",
+              os.path.isfile(personaf) and "自测用的人格" in open(personaf, encoding="utf-8").read())
+        rc, out = run(["persona", "show"])
+        check("persona show 认出自定义", "persona.md" in out)
+        rc, out = run(["apply", "-i", install, "-d", data, "--no-cloudmem"])
+        tplbody = open(tpl1, encoding="utf-8").read()
+        check("自定义人格进了提示词", "自测用的人格" in tplbody)
+        rc, out = run(["persona", "reset"])
+        check("persona reset 删掉文件", rc == 0 and "已删除" in out and not os.path.isfile(personaf))
+        rc, out = run(["persona"])
+        check("reset 后回到内置", "内置默认" in out)
+
+        print("== 5d. 指纹快路径 ==")
+        rc1, o1 = run(["apply", "-i", install, "-d", data, "--no-cloudmem", "--quiet"])
+        rc2, o2 = run(["apply", "-i", install, "-d", data, "--no-cloudmem", "--quiet"])
+        check("二次 --quiet 走快路径（退出 0、无输出）",
+              rc2 == 0 and o2.strip() == "", repr(o2[:200]))
 
         print("== 6. cloudmem ==")
         rc, out = run(["cloudmem", "-i", install, "-d", data])
@@ -324,6 +370,23 @@ def main():
         return 1
     print("全部通过")
     return 0
+
+
+def _node_check_ok(path):
+    """本机有 node 就真跑 --check；没有就跳过（返回 True）。"""
+    exe = ""
+    for c in (os.environ.get("WBPOJIA_NODE", ""),
+              os.path.join(os.environ.get("ProgramFiles", ""), "nodejs", "node.exe")):
+        if c and os.path.isfile(c):
+            exe = c
+            break
+    if not exe:
+        import shutil as _sh
+        exe = _sh.which("node") or ""
+    if not exe:
+        return True
+    r = subprocess.run([exe, "--check", path], capture_output=True, timeout=120)
+    return r.returncode == 0
 
 
 def _json_ok(path):

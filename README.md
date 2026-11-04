@@ -7,10 +7,11 @@
 
 **English (short)** · full document in Chinese: [README.zh.md](README.zh.md) ← 中文全文（主文档）
 
-A single-file, zero-dependency command line tool for the **WorkBuddy desktop client** (Electron). It does exactly two things, locally, on your own machine:
+A single-file, zero-dependency command line tool for the **WorkBuddy desktop client** (Electron). It does exactly three things, locally, on your own machine:
 
 1. **Prompt policy replacement** — swaps the `<content_policy>` block inside WorkBuddy's built-in prompt templates (the ones the UI does not expose) for the operator's own version, then appends a high-priority overlay block and a self-check passphrase.
-2. **Command gate release** — inserts `return{behavior:"allow"}` as the first statement of `checkBashSecurityWindows` / `checkPowerShellSecurity`, so the client's bundled command guard stops blocking local commands.
+2. **Command gate release** — injects a release statement as the first line of 4 gate functions (`checkBashSecurityWindows`, `checkPowerShellSecurity`, `getDestructiveCommandWarning`, `isSandboxForcedByManagedPolicy`) and makes `BashTool.needsApproval` return `false` outright, then syntax-checks the patched JS with `node --check` before writing it.
+3. **Custom system prompt (v2.1)** — write your own persona text from the `persona` subcommand or the panel's persona card; no hand-editing files.
 
 No network access, no third-party packages, no GUI. Every modified file is backed up as `*.unlockbak` next to the original, and a single `revert` restores factory state.
 
@@ -26,7 +27,7 @@ No network access, no third-party packages, no GUI. Every modified file is backe
 |---|---|---|
 | L1 | `<install>\resources\app.asar.unpacked\resources\**\*.tpl` | replace `<content_policy>` wholesale, append a `<system_reminder>` overlay |
 | L2 | `<install>\resources\app.asar.unpacked\cli\product.json` | same policy text replacement (pure string edit, JSON never re-serialized) |
-| L3 | `cli\dist` and `node_modules\@genie\agent-harness\cli\dist-server\**\*.js/.cjs/.mjs` | insert `return{behavior:"allow"}` as the first statement of the two gate functions (old `codebuddy.js`, new `shared.cjs`) |
+| L3 | `cli\dist` and `node_modules\@genie\agent-harness\cli\dist-server\**\*.js/.cjs/.mjs` | release 4 gate functions (`checkXxxSecurity` → `return{behavior:"allow"}`, `getDestructiveCommandWarning` → `return null`, `isSandboxForcedByManagedPolicy` → `return false`) plus `BashTool.needsApproval` → `return!1` (old `codebuddy.js`, new `shared.cjs`, both patched) |
 | L4 | `<data>\plugins\**\*.tpl` | same as L1 (per-version cached copies; otherwise they override) |
 | L5 | `<data>\cache\acc-product-config-v3*.json` | delete, so the client rebuilds it from the patched `product.json` |
 | L6 | `<data>\memory\<uid>_memory.md` (`memoryBlock`) | per-turn account cloud memory injection (`Version 999999`, read-only, original kept as `.pojia.bak`) |
@@ -44,7 +45,7 @@ No network access, no third-party packages, no GUI. Every modified file is backe
 
 ## Installation — three double-click entry points
 
-Keep these four files in the same folder:
+Keep these four files in the same folder (or install the release zip / use Scoop, see below):
 
 ```text
 wbpojia.py      the engine (the only Python file)
@@ -66,9 +67,17 @@ python wbpojia.py doctor             # environment self-check (read-only) — fi
 python wbpojia.py revert             # restore from *.unlockbak
 ```
 
-## Commands (10)
+Prebuilt exes come from the release zip `wbpojia-v2.1.0-win64.zip` (`wbpojia.exe` + `wbpojia-panel.exe`). Scoop users can skip the download entirely:
 
-`status` · `check` · `doctor` · `apply` · `revert` · `cloudmem` · `guard-install` · `guard-remove` · `menu` · `onekey`
+```powershell
+scoop install https://raw.githubusercontent.com/Elysia-SHY/wbpojia/main/docs/scoop/wbpojia.json
+```
+
+Scoop only puts the exes on disk — it does not patch anything for you; run `wbpojia doctor` then `wbpojia apply` once. Install/upgrade/uninstall and hash maintenance: [docs/scoop.md](docs/scoop.md).
+
+## Commands (11 + `panel`)
+
+`status` · `check` · `doctor` · `apply` · `revert` · `cloudmem` · `guard-install` · `guard-remove` · `menu` · `onekey` · `persona` — plus the long-running `panel`, so `--help` lists 12.
 
 `doctor` is not optional: it is the first thing to run for "nothing shows up" and "target not found".
 
@@ -76,11 +85,22 @@ Menu entries: `1` patch (`apply --no-cloudmem`) · `2` prompts only · `3` check
 
 ## Options
 
-`-i`/`-d` (install dir / data dir) · `-p` (persona file) · `--dry-run` · `--full` · `--ask-mode` · `--web-filter` · `--nofileguard` · `--force` · `--restart` · `--keep-cache` · `--no-js` · `--deep-js` · `--no-cloudmem` · `--clean-spill` · `--purge-spill` · `--quiet` · `-v` · `--pick` · `--all` · `--save-path`
+`-i`/`-d` (install dir / data dir) · `-p` (persona file) · `--dry-run` · `--full` · `--ask-mode` · `--web-filter` · `--nofileguard` · `--force` · `--restart` · `--keep-cache` · `--no-js` · `--deep-js` · `--no-cloudmem` · `--clean-spill` · `--purge-spill` · `--quiet` · `-v` · `--pick` · `--all` · `--save-path` · `--file` / `--reset` (persona) · `--no-verify` (skip the `node --check` gate)
 
 Exit codes: `0` ok, `1` failed / `check` not ready, `2` unknown command. Full semantics: [README.zh.md](README.zh.md).
 
-## `status` sample (real v2.0 run, paths trimmed)
+## Custom system prompt (v2.1)
+
+```powershell
+wbpojia persona                                  # show source, length, save path, usage
+wbpojia persona set "you are ..."                # set directly
+wbpojia persona set --file D:\path\persona.md    # or read from a file
+wbpojia persona reset                            # drop it, back to the built-in 小码酱
+```
+
+The panel has the same thing as a card: a textarea plus **save / save & apply / restore built-in**. "Save & apply" writes the persona file and runs one `apply` for you. Resolution order: `--persona` > `persona.md` next to the script/exe > `my-prompt.txt` next to it > `_wb状态\persona.md` > built-in. Steps 2 and 4 depend on writability: an exe under `Program Files` falls back to `%LOCALAPPDATA%\wbpojia\persona.md`, and `persona` reports the path it actually uses.
+
+## `status` sample (real v2.1 run, paths trimmed)
 
 ```text
   共扫描 692 个文件，其中 26 个带 <content_policy>
@@ -95,8 +115,10 @@ Exit codes: `0` ok, `1` failed / `check` not ready, `2` unknown command. Full se
   [已破甲]  json  <install>\resources\app.asar.unpacked\cli\product.json  391280
 
 -- L3 命令闸门 JS ------------------------------------------
-  [已开 2/2]  codebuddy-lite-wb.mjs
-  [已开 2/2]  shared.cjs
+  [已开 5/5]  codebuddy-lite-wb.mjs
+  [已开 5/5]  shared.cjs
+  [ok]  BashTool.needsApproval           已开
+  # + one line per gate; N/M = released / matched in that file (5 in v2.1, 2 in v2.0)
 
 -- L4 数据目录 plugins 模板 --------------------------------
   [已破甲]  tpl   <data>\plugins\cache\...\prompt.tpl   34421
@@ -123,6 +145,8 @@ Anything else means L1/L2/L4 did not land in the template the client actually lo
 ## Self-heal (optional)
 
 `guard-install` registers two scheduled tasks (`WorkBuddyUnlockV6_Hourly` every 30 minutes, `WorkBuddyUnlockV6_Logon` at logon) that re-apply the patch after a client update. Both run with `/RL HIGHEST`, so that step needs an elevated shell; patching itself does not. `guard-remove` deletes them, including legacy task names.
+
+Since v2.1 those tasks run `apply --quiet`, which compares a fingerprint first — target directory mtimes and entry counts, hashes of `installed_plugins.json` and `cli\product.json`, plus the engine version — and exits immediately when nothing changed instead of rescanning all 692 files. `apply --force` skips that fast path.
 
 ## Uninstall
 
@@ -155,15 +179,20 @@ This tool modifies local files of a third-party desktop client on your own machi
 
 ## Known limits (from static reverse engineering)
 
-Three enforcement points sit **outside** this tool's reach, all verified in the shipped client
+Two enforcement points sit **outside** this tool's reach, both verified in the shipped client
 (evidence: [docs/rea-workbuddy.md](docs/rea-workbuddy.md)):
 
-- `getDestructiveCommandWarning` — a second destructive-command gate, independent of the two
-  `checkXxxSecurity` functions that L3 rewrites.
-- `sandboxPermissionGateway` + the native `tsbx` module under `vendor\sandbox\5.9.5` — the sandbox
-  runs out-of-process, so JavaScript patches cannot reach it.
-- `clientSecurity → isSandboxForcedByManagedPolicy` — when a managed policy turns this on, the
-  sandbox is enforced regardless of the JS patch.
+- The native sandbox under `cli\vendor\sandbox\5.9.5\` (`tsbx.dll`, `sandbox-cli.exe`,
+  `sandbox-center.exe`) — it runs out-of-process, so string patches in the JS bundles cannot reach
+  it. v2.1 works around the entry point instead: `BashTool.needsApproval` returns `false` on its
+  first line, so a command never reaches the branch that asks the sandbox.
+- The `applyCommandGate` service — `BashTool.needsApproval` calls it twice for an approval verdict.
+  The tool leaves the service implementation alone; after the early `return` both call sites are
+  unreachable.
+
+`getDestructiveCommandWarning` and `clientSecurity → isSandboxForcedByManagedPolicy` used to be on
+this list in v2.0 — **v2.1 patches both** (`return null` / `return false`). Full boundary notes:
+[docs/compatibility.md](docs/compatibility.md).
 
 The host validates but does not restore: `app.asar` declares SHA-256 for 9893 entries and
 `EnableEmbeddedAsarIntegrityValidation` is enabled, yet every file this tool rewrites lives under
