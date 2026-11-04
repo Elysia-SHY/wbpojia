@@ -1,44 +1,48 @@
 # wbpojia
 
-Patches two things in the WorkBuddy desktop client:
+Patch tool for the WorkBuddy desktop client.
 
-1. The `<content_policy>` block inside its prompt templates, so it stops adding its own restrictions to answers.
-2. A handful of command-security functions, so Bash and PowerShell commands run without an approval prompt.
+Modifies two areas:
 
-Single-file Python, standard library only, no network. Prebuilt exes are in [Releases](https://github.com/Elysia-SHY/wbpojia/releases/latest) if you don't want Python on the machine.
+1. The `<content_policy>` block in its prompt templates.
+2. A set of command-security functions, so Bash and PowerShell calls return allow without an approval prompt.
 
-Derived from [pojia-next](https://github.com/z91772524-ai/pojia-next) (MIT). Only the WorkBuddy patch engine was taken; the GUI, online checks, ads and other target platforms were dropped.
+Single-file Python, standard library only, no network access. Prebuilt exe releases available.
 
-Chinese docs: [README.zh.md](README.zh.md).
+Derived from [pojia-next](https://github.com/z91772524-ai/pojia-next) (MIT). Only the WorkBuddy patch engine was taken; GUI, online checks, ads and other target platforms are excluded.
 
-## What gets patched
+Chinese documentation: [README.zh.md](README.zh.md).
 
-Six layers. Each one is independent — a layer that isn't found is skipped.
+## Files patched
+
+Six independent layers. A layer that does not match is skipped.
 
 | | Path | Action |
 |---|---|---|
 | L1 | `<install>\resources\app.asar.unpacked\resources\**\*.tpl` | Replace the `<content_policy>` block, append a `<system_reminder>` |
-| L2 | `cli\product.json` and `node_modules\@genie\agent-harness\cli\product.json` | Same text replacement. Both files carry the policy block |
-| L3 | `cli\dist\codebuddy-lite-wb.mjs`, `dist-server\shared.cjs` | Insert one allow-statement at the top of five check functions |
+| L2 | `cli\product.json`, `node_modules\@genie\agent-harness\cli\product.json` | Text replacement. Both files carry the policy block |
+| L3 | `cli\dist\codebuddy-lite-wb.mjs`, `dist-server\shared.cjs` | Insert an allow statement at the top of five check functions |
 | L4 | `<data>\plugins\**\*.tpl` | Same as L1. The client caches a copy per version directory |
-| L5 | `<data>\cache\acc-product-config-v3-<pid>-<uuid>.json` | Rebuilt from L2 on every launch. Only stale ones get removed |
-| L6 | `<data>\memory\<uid>_memory.md` | Account-level cloud memory. Optional, untouched by default |
+| L5 | `<data>\cache\acc-product-config-v3-<pid>-<uuid>.json` | Rebuilt from L2 on every launch. Only stale files are removed |
+| L6 | `<data>\memory\<uid>_memory.md` | Account-level cloud memory. Not modified by default |
 
-`<install>` is the folder holding `WorkBuddy.exe`; `<data>` is `C:\Users\<you>\.workbuddy`.
+`<install>` is the directory containing `WorkBuddy.exe`; `<data>` is `C:\Users\<user>\.workbuddy`.
 
-Every JS patch is followed by `node --check` on the whole file. If it fails, the file isn't written. Without node installed it falls back to a bracket-balance check.
+Every JS write is preceded by `node --check` on the full file; a failure skips that file. Without node the check degrades to bracket balancing.
 
-Two things this can't reach — the native sandbox (`cli\vendor\sandbox\5.9.5\tsbx`, out of process) and the `applyCommandGate` service. Listed in [docs/compatibility.md](docs/compatibility.md).
+Two enforcement points are outside patch range: the native sandbox (`cli\vendor\sandbox\5.9.5\tsbx`, out of process) and the `applyCommandGate` service. See [docs/compatibility.md](docs/compatibility.md).
 
-## Install
+## Installation
 
-Grab `wbpojia-v2.1.0-win64.zip` from Releases and unpack it anywhere. Or:
+Download `wbpojia-v2.1.0-win64.zip` from [Releases](https://github.com/Elysia-SHY/wbpojia/releases/latest) and extract it.
+
+Or:
 
 ```powershell
 scoop install https://raw.githubusercontent.com/Elysia-SHY/wbpojia/main/docs/scoop/wbpojia.json
 ```
 
-Or run from source with Python 3.9+, no packages needed:
+Or run from source with Python 3.9 or later, no third-party packages:
 
 ```powershell
 python wbpojia.py doctor
@@ -50,33 +54,35 @@ python wbpojia.py apply
 
 ```powershell
 wbpojia status        # per-layer state
-wbpojia check         # health check, exit 1 if anything is off
-wbpojia doctor        # environment self-check; run this first when something's wrong
+wbpojia check         # health check, exit 1 when not satisfied
+wbpojia doctor        # environment self-check
 wbpojia apply         # patch
 wbpojia revert        # restore from .unlockbak
 wbpojia persona       # show the current system prompt
 ```
 
-Double-clicking `wbpojia-panel.exe` opens a local panel on `127.0.0.1` — layer states, buttons for each action, a text box for the system prompt, and a log pane. No arguments to `wbpojia.exe` does the same thing.
+`wbpojia-panel.exe`, or `wbpojia` without arguments, starts a local panel bound to `127.0.0.1`: layer states, action buttons, a system-prompt editor and a log pane.
 
-Exit codes: 0 ok, 1 failed or `check` failing, 2 bad command.
-
-After patching, quit WorkBuddy completely (tray icon included), reopen it, and send `破甲自检` in a fresh session. It should reply with exactly one line: `破甲自检成功`.
+Exit codes: 0 success, 1 failure or unsatisfied `check`, 2 invalid command.
 
 ## Custom system prompt
 
-Either use the box in the panel, or:
+Use the panel editor with "保存并应用", or:
 
 ```powershell
-wbpojia persona set "your prompt"
+wbpojia persona set "prompt text"
 wbpojia persona set --file D:\path\persona.md
 wbpojia persona reset
 ```
 
-Saved next to the executable as `persona.md`, or under `%LOCALAPPDATA%\wbpojia\` when that folder isn't writable. Run `apply` afterwards for it to take effect.
+Stored as `persona.md` next to the executable, or under `%LOCALAPPDATA%\wbpojia\` when that directory is not writable. Run `apply` afterwards for it to reach the client.
+
+## Verification
+
+Quit WorkBuddy completely, including the tray process, restart it, open a new session and send `破甲自检`. The expected reply is the single line `破甲自检成功`.
 
 ## License
 
-MIT. Upstream copyright line kept verbatim in [LICENSE](LICENSE); what was and wasn't taken is in [NOTICE](NOTICE).
+MIT. The upstream copyright notice is retained verbatim in [LICENSE](LICENSE); scope of what was and was not taken is in [NOTICE](NOTICE).
 
-This modifies local files of a third-party client on your own machine. Provided as is, no warranty.
+Provided as is, without warranty.

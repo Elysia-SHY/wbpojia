@@ -29,7 +29,7 @@ scoop bucket add wbpojia D:\tools\wbpojia\docs\scoop
 scoop install wbpojia
 ```
 
-`scoop bucket add` 也接受本地目录，只要那个目录根下就是 `wbpojia.json`（本仓库的 `docs\scoop\` 正是这个布局）。路径换成你自己的克隆位置。
+`scoop bucket add` 同样接受本地目录，要求该目录根下即为 `wbpojia.json`（本仓库的 `docs\scoop\` 即此布局）。路径按实际克隆位置填写。
 
 装完可以验证一下：
 
@@ -42,7 +42,7 @@ scoop which wbpojia    # 指向 scoop\shims\wbpojia.exe
 
 ## 2. 装完先干什么
 
-Scoop 只负责把 exe 放到盘上，不会替你打补丁。补丁要显式跑一次：
+Scoop 仅负责安装 exe，不执行补丁。补丁需显式执行一次：
 
 ```powershell
 wbpojia doctor            # 只读自检：目录探测、写入权限、闸门与备份状态
@@ -54,7 +54,7 @@ wbpojia check             # 体检，未达标退出码 1
 
 打完要**完全退出 WorkBuddy（含托盘图标）**再开，然后新建会话发四个字 `破甲自检`，正确回复只有一行 `破甲自检成功`。
 
-不开命令行也行：`wbpojia-panel`（或 `wbpojia` 不带参数）会起本地面板，页面上有「人格」卡片和九个按钮，和命令行等价。
+亦可使用图形入口：`wbpojia-panel`（或 `wbpojia` 不带参数）启动本地面板，页面包含人格编辑区与九个操作按钮，行为与命令行一致。
 
 ---
 
