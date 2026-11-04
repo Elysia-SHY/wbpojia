@@ -12,7 +12,7 @@
     "architecture": {
         "64bit": {
             "url": "https://github.com/Elysia-SHY/wbpojia/releases/download/v2.1.0/wbpojia-v2.1.0-win64.zip",
-            "hash": "<待填：release 后更新>"
+            "hash": "c3b6cbaf523ada143a1f60e53e7707dcd3ae5df0c3a7a729e6b7d4261cae1e0b"
         }
     },
     "bin": ["wbpojia.exe", "wbpojia-panel.exe"],
