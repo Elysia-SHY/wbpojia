@@ -27,6 +27,8 @@ ROOT = os.path.dirname(HERE)
 # 可以用 WBPOJIA_ENGINE 指向打包好的 exe，同一套断言直接验证发布产物
 ENGINE = os.environ.get("WBPOJIA_ENGINE") or os.path.join(ROOT, "wbpojia.py")
 IS_EXE = ENGINE.lower().endswith(".exe")
+# exe 形态下状态/人格文件跟着 exe 走（dist\），脚本形态下跟着脚本走
+ENGINE_DIR = os.path.dirname(os.path.abspath(ENGINE))
 
 
 def engine_cmd(args):
@@ -309,7 +311,7 @@ def main():
         check("persona 显示当前来源", rc == 0 and "来源" in out, out[-300:])
         rc, out = run(["persona", "set", "自测用的人格文本。"])
         check("persona set 落盘", rc == 0 and "已保存" in out, out[-300:])
-        personaf = os.path.join(ROOT, "persona.md")
+        personaf = os.path.join(ENGINE_DIR, "persona.md")
         check("persona.md 真的写出来了",
               os.path.isfile(personaf) and "自测用的人格" in open(personaf, encoding="utf-8").read())
         rc, out = run(["persona", "show"])
