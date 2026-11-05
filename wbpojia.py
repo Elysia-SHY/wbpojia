@@ -546,6 +546,53 @@ def _dir_writable(d):
         return False
 
 
+def is_elevated():
+    """当前进程是否已提权。拿不到判断就当没提权。"""
+    try:
+        import ctypes
+        return bool(ctypes.windll.shell32.IsUserAnAdmin())
+    except Exception:
+        return False
+
+
+def probe_dir(d):
+    """目录探针：照抄 write_text 的落盘方式（目录里建临时文件 + 改名覆盖）。
+
+    返回 (可写, 失败原因)。DRY 下只查一次访问位，不落盘。
+    """
+    if DRY:
+        ok = os.access(d, os.W_OK)
+        return ok, "" if ok else "拒绝访问"
+    try:
+        fd, tmp = tempfile.mkstemp(dir=d, prefix=".wbpojia-probe-")
+    except OSError as e:
+        return False, "[Errno %s] %s" % (e.errno, e.strerror or e)
+    os.close(fd)
+    try:
+        os.replace(tmp, tmp + ".x")
+        return True, ""
+    except OSError as e:
+        return False, "[Errno %s] %s" % (e.errno, e.strerror or e)
+    finally:
+        for p in (tmp, tmp + ".x"):
+            try:
+                os.remove(p)
+            except OSError:
+                pass
+
+
+def preflight_dirs(paths):
+    """按目录去重预检，返回 {目录: 失败原因}，只收不可写的。"""
+    bad = {}
+    for p in paths:
+        d = os.path.dirname(p)
+        if d and d not in bad:
+            ok, why = probe_dir(d)
+            if not ok:
+                bad[d] = why
+    return bad
+
+
 def persona_target():
     """自定义人格写哪儿：优先脚本/exe 同目录，写不动就落到状态目录。"""
     if _dir_writable(HERE):
@@ -1216,19 +1263,22 @@ def verify_js(text, original_path=""):
 # ==========================================================================
 
 def backup(path):
+    """备份成败要给调用方看见：备份失败还硬写，等于把回滚点丢了。"""
     if DRY or not os.path.isfile(path):
-        return
+        return True
     bak = path + BAK
     if os.path.exists(bak):
-        return
+        return True
     txt, _b = read_text(path)
     if is_our_artifact(txt):
         say("跳过备份（当前内容已是本工具产物）: %s" % os.path.basename(path), "warn")
-        return
+        return True
     try:
         shutil.copy2(path, bak)
     except OSError as e:
         say("备份失败 %s: %s" % (os.path.basename(path), e), "err")
+        return False
+    return True
 
 
 def restore_all(install, data):
@@ -1813,6 +1863,11 @@ def cmd_apply(install, data, args):
     # L1 / L2 / L4
     section("L1 / L2 / L4 提示词靶点")
     rows = scan_targets(install, data, want, roots)
+    # 预检：写不动的目录一次说清，不要把每个文件都撞一遍，也不要一律甩锅给「要管理员」。
+    l1l2l4 = [r["path"] for r in rows if r["layer"] in ("L1", "L2", "L4")]
+    blocked = {} if DRY else preflight_dirs(l1l2l4)
+    blocked_lids = []
+    hinted = False
     for r in rows:
         lid = r["layer"]
         if lid not in ("L1", "L2", "L4"):
@@ -1875,13 +1930,21 @@ def cmd_apply(install, data, args):
             stats[lid]["skip"] += 1
             continue
 
+        if os.path.dirname(path) in blocked:
+            stats[lid]["err"] += 1
+            blocked_lids.append(lid)
+            continue
+
         if DRY:
             say("将修复 %s%s%s" % (r["rel"], (" (+%d 子句)" % clauses) if clauses else "",
                                    "（无政策块，仅文本补丁）" if aux_only else ""), "dry")
             stats[lid]["fixed"] += 1
             guard_total += guard_n
             continue
-        backup(path)
+        if not backup(path):
+            stats[lid]["err"] += 1
+            blocked_lids.append(lid)
+            continue
         try:
             write_text(path, new, bom=r.get("bom", False))
             stats[lid]["fixed"] += 1
@@ -1894,15 +1957,22 @@ def cmd_apply(install, data, args):
         except OSError as e:
             stats[lid]["err"] += 1
             say("写入失败 %s: %s" % (r["rel"], e), "err")
-            if "denied" in str(e).lower() or "权限" in str(e):
-                say("改 Program Files 要以管理员身份运行", "warn")
+            if not hinted and ("denied" in str(e).lower() or "权限" in str(e)):
+                hinted = True
+                if is_elevated():
+                    say("目录能建临时文件但写入被拒：多半是目标文件被占用（WorkBuddy 还在跑），"
+                        "或目录 ACL 只允许特定账户", "warn")
+                else:
+                    say("改 Program Files 要以管理员身份运行", "warn")
 
-    if not any(stats[l]["fixed"] for l in ("L1", "L2", "L4")):
+    if not any(stats[l]["fixed"] or stats[l]["err"] for l in ("L1", "L2", "L4")):
         say("提示词靶点全部已是最新（--force 可强制重写）", "ok")
 
     # L3 命令闸门
     section("L3 命令闸门")
     jsf = [] if args.no_js else js_files(install, args.deep_js)
+    if jsf and not DRY:
+        blocked.update(preflight_dirs(jsf))
     if args.no_js:
         say("--no-js：只改提示词，不碰闸门", "dot")
     elif not jsf:
@@ -1934,7 +2004,14 @@ def cmd_apply(install, data, args):
             stats["L3"]["err"] += 1
             say("注入会让 %s 语法失效，已放弃：%s" % (os.path.basename(p), why), "err")
             continue
-        backup(p)
+        if os.path.dirname(p) in blocked:
+            stats["L3"]["err"] += 1
+            blocked_lids.append("L3")
+            continue
+        if not backup(p):
+            stats["L3"]["err"] += 1
+            blocked_lids.append("L3")
+            continue
         try:
             write_text(p, new, bom=bom)
             stats["L3"]["fixed"] += cnt
@@ -2032,6 +2109,21 @@ def cmd_apply(install, data, args):
         say("复查：%s" % ("全部就绪" if bad == 0 else "%d 处未生效" % bad),
             "ok" if bad == 0 else "err")
 
+    if blocked and blocked_lids:
+        section("写入受阻")
+        for d, why in blocked.items():
+            say("%s 不可写：%s" % (rel(d, roots), why), "err")
+        cnt = {}
+        for l in blocked_lids:
+            cnt[l] = cnt.get(l, 0) + 1
+        say("%d 个文件没写进去（%s）" % (len(blocked_lids),
+              " / ".join("%s %d" % (l, cnt[l]) for l in LAYER_IDS if l in cnt)), "err")
+        if is_elevated():
+            say("已经是管理员仍被拒绝，说明不是 UAC 问题：看目录 ACL（属主可能不是 Administrators）、"
+                "安全软件拦截，或客户端正占着目标文件", "warn")
+        else:
+            say("当前不是管理员：右键 破甲.bat → 以管理员身份运行，再跑一次", "warn")
+
     section("结果")
     table([[lid, LAYER_TITLE[lid], str(stats[lid]["fixed"]),
             str(stats[lid]["skip"]), str(stats[lid]["ign"]), str(stats[lid]["err"])]
@@ -2050,7 +2142,10 @@ def cmd_apply(install, data, args):
             if r["text"] and loose_state(r["text"], want) == "current":
                 stamped.append(r["path"])
         passport_save(install, data, want, stamped, apply_fingerprint(install, data))
-        say("自证：新会话里单独发「%s」，应只回一行「%s」" % (PASSPHRASE, SIGNAL_REPLY), "dot")
+        if total_err and total_fixed:
+            say("部分生效：%d 处没写进去，先看上面的「写入受阻」，别拿自检结果当结论" % total_err, "warn")
+        elif not total_err:
+            say("自证：新会话里单独发「%s」，应只回一行「%s」" % (PASSPHRASE, SIGNAL_REPLY), "dot")
 
     if args.restart and not DRY and install:
         run(["taskkill", "/IM", "WorkBuddy.exe", "/F"], 20)
@@ -2067,6 +2162,8 @@ def cmd_apply(install, data, args):
                 say("已重启 WorkBuddy", "ok")
             except OSError as e:
                 say("重启失败：%s" % e, "warn")
+    elif not DRY and total_err and not total_fixed:
+        say("本次没有改动落盘，先解决上面的写入受阻再重跑", "warn")
     elif not DRY:
         say("请完全退出 WorkBuddy（含托盘）再打开，改动才生效", "dot")
     return 0 if total_err == 0 else 1
