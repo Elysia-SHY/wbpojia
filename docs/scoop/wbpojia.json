@@ -1,5 +1,5 @@
 {
-    "version": "2.1.0",
+    "version": "2.2.0",
     "description": "WorkBuddy 破甲 CLI —— 提示词政策替换 + 命令闸门放行 + 云记忆通道（Windows x64，无 GUI）",
     "homepage": "https://github.com/Elysia-SHY/wbpojia",
     "license": "MIT",
@@ -11,8 +11,8 @@
     ],
     "architecture": {
         "64bit": {
-            "url": "https://github.com/Elysia-SHY/wbpojia/releases/download/v2.1.0/wbpojia-v2.1.0-win64.zip",
-            "hash": "c3b6cbaf523ada143a1f60e53e7707dcd3ae5df0c3a7a729e6b7d4261cae1e0b"
+            "url": "https://github.com/Elysia-SHY/wbpojia/releases/download/v2.2.0/wbpojia-v2.2.0-win64.zip",
+            "hash": "65ea85ab390e8590db431ec71dc87edd86fa2de5fc794e41a0370994ec67fec8"
         }
     },
     "bin": ["wbpojia.exe", "wbpojia-panel.exe"],
