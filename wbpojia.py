@@ -41,7 +41,7 @@ import tempfile
 import time
 import unicodedata
 
-__version__ = "2.1"
+__version__ = "2.2"
 
 IS_WIN = (os.name == "nt")
 
@@ -1216,19 +1216,137 @@ def verify_js(text, original_path=""):
 # ==========================================================================
 
 def backup(path):
+    """首次写入前保留原文件；无法确认备份存在时禁止继续写入。"""
     if DRY or not os.path.isfile(path):
-        return
+        return True
     bak = path + BAK
-    if os.path.exists(bak):
-        return
+    if os.path.isfile(bak):
+        return True
     txt, _b = read_text(path)
     if is_our_artifact(txt):
         say("跳过备份（当前内容已是本工具产物）: %s" % os.path.basename(path), "warn")
-        return
+        return True
     try:
         shutil.copy2(path, bak)
+        return True
     except OSError as e:
-        say("备份失败 %s: %s" % (os.path.basename(path), e), "err")
+        say("备份失败 %s: %s；已跳过写入，原文件未改" % (os.path.basename(path), e), "err")
+        return False
+
+
+def is_permission_error(exc):
+    return isinstance(exc, PermissionError) or getattr(exc, "errno", None) in (1, 13)
+
+
+def write_permission_hint():
+    if is_elevated():
+        say("当前已是管理员：仍无写入权限，请检查该目录的安全权限、所有者或安全软件拦截", "warn")
+    else:
+        say("当前进程没有该文件的写入权限；Program Files 通常需要管理员权限（--no-elevate 已禁用自动提权）", "warn")
+
+
+# ---------------------------------------------------------- Windows UAC ---
+
+def is_elevated():
+    if not IS_WIN:
+        return False
+    try:
+        import ctypes
+        return bool(ctypes.windll.shell32.IsUserAnAdmin())
+    except Exception:
+        return False
+
+
+def install_needs_elevation(install):
+    """仅对受 UAC 保护的标准 Program Files 安装目录自动提权。"""
+    if not IS_WIN or not install:
+        return False
+    target = os.path.normcase(os.path.abspath(install))
+    roots = {os.environ.get("ProgramFiles", r"C:\Program Files"),
+             os.environ.get("ProgramFiles(x86)", r"C:\Program Files (x86)")}
+    for root in roots:
+        if not root:
+            continue
+        base = os.path.normcase(os.path.abspath(root))
+        if os.path.commonpath((target, base)) == base:
+            return True
+    return False
+
+
+def _quote_arg(arg):
+    return subprocess.list2cmdline([str(arg)])
+
+
+def relaunch_elevated():
+    """重跑原命令并等待子进程，返回其退出码；取消 UAC 时返回 None。"""
+    import ctypes
+    from ctypes import wintypes
+
+    class SHELLEXECUTEINFOW(ctypes.Structure):
+        _fields_ = [
+            ("cbSize", wintypes.DWORD), ("fMask", wintypes.ULONG),
+            ("hwnd", wintypes.HWND), ("lpVerb", wintypes.LPCWSTR),
+            ("lpFile", wintypes.LPCWSTR), ("lpParameters", wintypes.LPCWSTR),
+            ("lpDirectory", wintypes.LPCWSTR), ("nShow", ctypes.c_int),
+            ("hInstApp", wintypes.HINSTANCE), ("lpIDList", wintypes.LPVOID),
+            ("lpClass", wintypes.LPCWSTR), ("hkeyClass", wintypes.HKEY),
+            ("dwHotKey", wintypes.DWORD), ("hIconOrMonitor", wintypes.HANDLE),
+            ("hProcess", wintypes.HANDLE),
+        ]
+
+    argv = list(sys.argv[1:]) + ["--elevated-child"]
+    params = " ".join(_quote_arg(a) for a in ([SELF] + argv if not FROZEN else argv))
+    info = SHELLEXECUTEINFOW()
+    info.cbSize = ctypes.sizeof(info)
+    info.fMask = 0x00000040  # SEE_MASK_NOCLOSEPROCESS：可等待并读取真实退出码
+    info.lpVerb = "runas"
+    info.lpFile = sys.executable
+    info.lpParameters = params
+    info.lpDirectory = HERE
+    info.nShow = 1
+    shell = ctypes.windll.shell32
+    shell.ShellExecuteExW.argtypes = [ctypes.POINTER(SHELLEXECUTEINFOW)]
+    shell.ShellExecuteExW.restype = wintypes.BOOL
+    if not shell.ShellExecuteExW(ctypes.byref(info)):
+        err = ctypes.GetLastError()
+        if err == 1223:
+            say("已取消管理员授权，未继续写入；也可以改用 --no-elevate 仅处理用户目录", "warn")
+        else:
+            say("启动管理员进程失败（Windows 错误 %d）" % err, "err")
+        return None
+    if not info.hProcess:
+        say("无法等待管理员进程，请在新窗口查看结果", "warn")
+        return None
+    try:
+        kernel = ctypes.windll.kernel32
+        kernel.WaitForSingleObject.argtypes = [wintypes.HANDLE, wintypes.DWORD]
+        kernel.WaitForSingleObject.restype = wintypes.DWORD
+        kernel.GetExitCodeProcess.argtypes = [wintypes.HANDLE, ctypes.POINTER(wintypes.DWORD)]
+        kernel.GetExitCodeProcess.restype = wintypes.BOOL
+        kernel.WaitForSingleObject(info.hProcess, 0xFFFFFFFF)
+        code = wintypes.DWORD(1)
+        if not kernel.GetExitCodeProcess(info.hProcess, ctypes.byref(code)):
+            say("管理员进程已结束，但无法读取退出码", "err")
+            return None
+        return int(code.value)
+    finally:
+        kernel.CloseHandle(info.hProcess)
+
+
+def maybe_relaunch_elevated(install, args):
+    if (getattr(args, "no_elevate", False) or DRY or not install_needs_elevation(install)
+            or is_elevated() or os.environ.get("WBPOJIA_ELEVATED") == "1"):
+        return None
+    say("WorkBuddy 位于 Program Files，需要通过 Windows UAC 以管理员身份继续", "warn")
+    os.environ["WBPOJIA_ELEVATED"] = "1"
+    try:
+        code = relaunch_elevated()
+    except Exception as e:
+        say("自动提权失败：%s" % e, "err")
+        return 1
+    if code is None:
+        return 1
+    return code
 
 
 def restore_all(install, data):
@@ -1881,7 +1999,9 @@ def cmd_apply(install, data, args):
             stats[lid]["fixed"] += 1
             guard_total += guard_n
             continue
-        backup(path)
+        if not backup(path):
+            stats[lid]["err"] += 1
+            continue
         try:
             write_text(path, new, bom=r.get("bom", False))
             stats[lid]["fixed"] += 1
@@ -1894,10 +2014,13 @@ def cmd_apply(install, data, args):
         except OSError as e:
             stats[lid]["err"] += 1
             say("写入失败 %s: %s" % (r["rel"], e), "err")
-            if "denied" in str(e).lower() or "权限" in str(e):
-                say("改 Program Files 要以管理员身份运行", "warn")
+            if is_permission_error(e):
+                write_permission_hint()
 
-    if not any(stats[l]["fixed"] for l in ("L1", "L2", "L4")):
+    prompt_failed = any(stats[l]["err"] for l in ("L1", "L2", "L4"))
+    if prompt_failed:
+        say("部分提示词靶点未写入，请根据上方错误处理；不能视为已完成", "err")
+    elif not any(stats[l]["fixed"] for l in ("L1", "L2", "L4")):
         say("提示词靶点全部已是最新（--force 可强制重写）", "ok")
 
     # L3 命令闸门
@@ -1934,7 +2057,9 @@ def cmd_apply(install, data, args):
             stats["L3"]["err"] += 1
             say("注入会让 %s 语法失效，已放弃：%s" % (os.path.basename(p), why), "err")
             continue
-        backup(p)
+        if not backup(p):
+            stats["L3"]["err"] += 1
+            continue
         try:
             write_text(p, new, bom=bom)
             stats["L3"]["fixed"] += cnt
@@ -1943,6 +2068,8 @@ def cmd_apply(install, data, args):
         except OSError as e:
             stats["L3"]["err"] += 1
             say("闸门写入失败 %s: %s" % (os.path.basename(p), e), "err")
+            if is_permission_error(e):
+                write_permission_hint()
 
     # 网页过滤（属于 L3 的附加动作）
     if (args.full or args.web_filter) and not DRY:
@@ -1950,8 +2077,17 @@ def cmd_apply(install, data, args):
         for p in jsf:
             txt, bom = read_text(p)
             if txt and WF_OLD in txt:
-                backup(p)
-                write_text(p, txt.replace(WF_OLD, WF_NEW), bom=bom)
+                if not backup(p):
+                    stats["L3"]["err"] += 1
+                    continue
+                try:
+                    write_text(p, txt.replace(WF_OLD, WF_NEW), bom=bom)
+                except OSError as e:
+                    stats["L3"]["err"] += 1
+                    say("网页过滤写入失败 %s: %s" % (os.path.basename(p), e), "err")
+                    if is_permission_error(e):
+                        write_permission_hint()
+                    continue
                 hit += 1
                 say("网页过滤已解除 %s" % os.path.basename(p), "ok")
         if not hit:
@@ -2007,8 +2143,9 @@ def cmd_apply(install, data, args):
                 say("发现 %d 份会话快照，未删除（不在备份范围，删了还原不回来；"
                     "--clean-spill 清过期 / --purge-spill 清全部）" % len(files), "warn")
 
-    # 回读核对
-    if not DRY and written:
+    # 回读核对：即使写入列表为空，也要检查本应有改动却失败的靶点。
+    total_err = sum(stats[l]["err"] for l in LAYER_IDS)
+    if not DRY and (written or total_err):
         section("回读核对")
         bad = 0
         for p in written:
@@ -2031,6 +2168,7 @@ def cmd_apply(install, data, args):
                 say("闸门未生效 %s" % os.path.basename(p), "err")
         say("复查：%s" % ("全部就绪" if bad == 0 else "%d 处未生效" % bad),
             "ok" if bad == 0 else "err")
+        total_err += bad
 
     section("结果")
     table([[lid, LAYER_TITLE[lid], str(stats[lid]["fixed"]),
@@ -2038,10 +2176,9 @@ def cmd_apply(install, data, args):
            for lid in LAYER_IDS],
           ["层", "说明", "改动", "已最新", "忽略", "错误"])
     total_fixed = sum(stats[l]["fixed"] for l in LAYER_IDS)
-    total_err = sum(stats[l]["err"] for l in LAYER_IDS)
     raw("")
-    say("完成：改动 %d / 子句 %d / 文件保护 %d / 错误 %d"
-        % (total_fixed, clauses_total, guard_total, total_err),
+    say("%s：改动 %d / 子句 %d / 文件保护 %d / 错误 %d"
+        % ("完成" if total_err == 0 else "未完成", total_fixed, clauses_total, guard_total, total_err),
         "ok" if total_err == 0 else "err")
 
     if not DRY:
@@ -2052,7 +2189,7 @@ def cmd_apply(install, data, args):
         passport_save(install, data, want, stamped, apply_fingerprint(install, data))
         say("自证：新会话里单独发「%s」，应只回一行「%s」" % (PASSPHRASE, SIGNAL_REPLY), "dot")
 
-    if args.restart and not DRY and install:
+    if args.restart and not DRY and install and total_err == 0:
         run(["taskkill", "/IM", "WorkBuddy.exe", "/F"], 20)
         time.sleep(2)
         exe = os.path.join(install, "WorkBuddy.exe")
@@ -2067,7 +2204,7 @@ def cmd_apply(install, data, args):
                 say("已重启 WorkBuddy", "ok")
             except OSError as e:
                 say("重启失败：%s" % e, "warn")
-    elif not DRY:
+    elif not DRY and total_err == 0:
         say("请完全退出 WorkBuddy（含托盘）再打开，改动才生效", "dot")
     return 0 if total_err == 0 else 1
 
@@ -2596,9 +2733,34 @@ class _Capture(object):
         return "".join(self.buf)
 
 
+def _option_value(argv, short, long):
+    for i, arg in enumerate(argv):
+        if arg in (short, long) and i + 1 < len(argv):
+            return argv[i + 1]
+        if arg.startswith(long + "="):
+            return arg.split("=", 1)[1]
+    return ""
+
+
+def _run_panel_elevated(install, args):
+    say("需要管理员权限；请在 UAC 提示中确认。操作会打开独立控制台。", "warn")
+    code = maybe_relaunch_elevated(install, args)
+    if code is None:
+        return 1, "未启动管理员操作。\n"
+    return code, ("管理员操作已结束，退出码 %d。详细输出见独立控制台；"
+                  "点击「状态」可刷新各层结果。\n" % code)
+
+
 def run_captured(argv):
     """在进程内跑一次 main()，返回 (exit_code, 输出文本)。"""
     global QUIET, DRY
+    if argv and argv[0] in ("apply", "onekey"):
+        # UAC 子进程不能继承这个 HTTP 请求捕获的 stdout。让它独立启动面板，
+        # 等待结束后读取面板输出，再把结果回显到当前页面。
+        install = resolve_install(_option_value(argv, "-i", "--install-dir"))
+        probe = build_parser().parse_args(list(argv))
+        if install_needs_elevation(install) and not is_elevated() and not probe.no_elevate:
+            return _run_panel_elevated(install, probe)
     cap = _Capture()
     old_out, old_err = sys.stdout, sys.stderr
     old_quiet, old_dry = QUIET, DRY
@@ -2925,6 +3087,9 @@ def build_parser():
     p.add_argument("--reset", dest="persona_reset", action="store_true", help="persona：删掉自定义人格")
     p.add_argument("--no-verify", dest="no_verify", action="store_true",
                    help="改 JS 后跳过 node --check 语法校验（不建议）")
+    p.add_argument("--no-elevate", action="store_true",
+                   help="Program Files 写入失败也不自动请求 UAC 提权")
+    p.add_argument("--elevated-child", action="store_true", help=argparse.SUPPRESS)
     p.add_argument("--version", action="version", version="wbpojia %s" % __version__)
     return p
 
@@ -2996,6 +3161,9 @@ def main(argv=None):
     if args.cmd == "doctor":
         return cmd_doctor(install, data, args)
     if args.cmd == "apply":
+        elevated = maybe_relaunch_elevated(install, args)
+        if elevated is not None:
+            return elevated
         return cmd_apply(install, data, args)
     if args.cmd == "revert":
         return cmd_revert(install, data)

@@ -34,7 +34,7 @@ Two enforcement points are outside patch range: the native sandbox (`cli\vendor\
 
 ## Installation
 
-Download `wbpojia-v2.1.0-win64.zip` from [Releases](https://github.com/Elysia-SHY/wbpojia/releases/latest) and extract it.
+Download `wbpojia-v2.2.0-win64.zip` from [Releases](https://github.com/Elysia-SHY/wbpojia/releases/latest) and extract it.
 
 Or:
 
@@ -64,6 +64,8 @@ wbpojia persona       # show the current system prompt
 `wbpojia-panel.exe`, or `wbpojia` without arguments, starts a local panel bound to `127.0.0.1`: layer states, action buttons, a system-prompt editor and a log pane.
 
 Exit codes: 0 success, 1 failure or unsatisfied `check`, 2 invalid command.
+
+When WorkBuddy is installed under `%ProgramFiles%`, `apply` / `onekey` re-launches itself through UAC, waits for the elevated process and forwards its exit code. `--no-elevate` disables that. A failed backup skips the file instead of overwriting it unbacked, and any write or read-back failure ends with "未完成" and exit code 1.
 
 ## Custom system prompt
 
