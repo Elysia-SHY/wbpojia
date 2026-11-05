@@ -41,7 +41,7 @@ JS 写入前执行 `node --check` 语法校验，未通过则跳过该文件。�
 
 ### exe
 
-从 [Releases](https://github.com/Elysia-SHY/wbpojia/releases/latest) 下载 `wbpojia-v2.2.0-win64.zip`，解压至任意目录。
+从 [Releases](https://github.com/Elysia-SHY/wbpojia/releases/latest) 下载 `wbpojia-v2.3.0-win64.zip`，解压至任意目录。
 
 包内容：
 
@@ -122,7 +122,7 @@ wbpojia persona           # 查看当前人格
 
 退出码：0 成功；1 执行失败或 `check` 未达标；2 命令无效。
 
-安装在 `%ProgramFiles%` 时，`apply` / `onekey` 会自动通过 Windows UAC 重新运行原命令，并等待、透传管理员进程的退出码。无需预先右键管理员运行；`--no-elevate` 可禁用该行为。备份失败时会跳过对应文件，不会无备份改写；任何写入或回读失败都会显示「未完成」并返回 1。若管理员进程仍报 `Errno 13`，请检查安装目录的安全权限、所有者及安全软件拦截，而不是重复提权。
+安装在 `%ProgramFiles%` 时，`apply` / `onekey` 会自动通过 Windows UAC 重新运行原命令，并等待、透传管理员进程的退出码。无需预先右键管理员运行；`--no-elevate` 可禁用该行为。备份失败时会跳过对应文件，不会无备份改写；写入受阻会汇总成一段并返回 1，全部失败时不再打印自证。若管理员进程仍报 `Errno 13`，请检查安装目录的安全权限、所有者及安全软件拦截，而不是重复提权。
 
 ## 自定义系统提示词
 

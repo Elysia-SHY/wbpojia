@@ -41,7 +41,7 @@ import tempfile
 import time
 import unicodedata
 
-__version__ = "2.1"
+__version__ = "2.3"
 
 IS_WIN = (os.name == "nt")
 
@@ -591,6 +591,99 @@ def preflight_dirs(paths):
             if not ok:
                 bad[d] = why
     return bad
+
+
+# ------------------------------------------------------------ Windows UAC ---
+# 预检只能报告「写不动」。能提权的话，在预检之前直接提权重跑，比事后让人
+# 右键 bat 更省事；提权失败或显式关闭时才落回预检的「写入受阻」。
+
+def install_needs_elevation(install):
+    """只有受 UAC 保护的标准 Program Files 才会自动提权。"""
+    if not IS_WIN or not install:
+        return False
+    target = os.path.normcase(os.path.abspath(install))
+    roots = {os.environ.get("ProgramFiles", r"C:\Program Files"),
+             os.environ.get("ProgramFiles(x86)", r"C:\Program Files (x86)")}
+    for root in roots:
+        if not root:
+            continue
+        base = os.path.normcase(os.path.abspath(root))
+        if os.path.commonpath((target, base)) == base:
+            return True
+    return False
+
+
+def _quote_arg(arg):
+    return subprocess.list2cmdline([str(arg)])
+
+
+def relaunch_elevated():
+    """以 runas 重跑原命令并等待，返回管理员进程退出码；取消 UAC 时返回 None。"""
+    import ctypes
+    from ctypes import wintypes
+
+    class SHELLEXECUTEINFOW(ctypes.Structure):
+        _fields_ = [
+            ("cbSize", wintypes.DWORD), ("fMask", wintypes.ULONG),
+            ("hwnd", wintypes.HWND), ("lpVerb", wintypes.LPCWSTR),
+            ("lpFile", wintypes.LPCWSTR), ("lpParameters", wintypes.LPCWSTR),
+            ("lpDirectory", wintypes.LPCWSTR), ("nShow", ctypes.c_int),
+            ("hInstApp", wintypes.HINSTANCE), ("lpIDList", wintypes.LPVOID),
+            ("lpClass", wintypes.LPCWSTR), ("hkeyClass", wintypes.HKEY),
+            ("dwHotKey", wintypes.DWORD), ("hIconOrMonitor", wintypes.HANDLE),
+            ("hProcess", wintypes.HANDLE),
+        ]
+
+    argv = list(sys.argv[1:]) + ["--elevated-child"]
+    params = " ".join(_quote_arg(a) for a in ([SELF] + argv if not FROZEN else argv))
+    info = SHELLEXECUTEINFOW()
+    info.cbSize = ctypes.sizeof(info)
+    info.fMask = 0x00000040          # SEE_MASK_NOCLOSEPROCESS：可等待、可读退出码
+    info.lpVerb = "runas"
+    info.lpFile = sys.executable
+    info.lpParameters = params
+    info.lpDirectory = HERE
+    info.nShow = 1
+    shell = ctypes.windll.shell32
+    shell.ShellExecuteExW.argtypes = [ctypes.POINTER(SHELLEXECUTEINFOW)]
+    shell.ShellExecuteExW.restype = wintypes.BOOL
+    if not shell.ShellExecuteExW(ctypes.byref(info)):
+        err = ctypes.GetLastError()
+        if err == 1223:
+            say("已取消管理员授权，未写入；也可以加 --no-elevate 只处理用户目录", "warn")
+        else:
+            say("启动管理员进程失败（Windows 错误 %d）" % err, "err")
+        return None
+    if not info.hProcess:
+        say("无法等待管理员进程，请在新窗口查看结果", "warn")
+        return None
+    try:
+        kernel = ctypes.windll.kernel32
+        kernel.WaitForSingleObject.argtypes = [wintypes.HANDLE, wintypes.DWORD]
+        kernel.WaitForSingleObject.restype = wintypes.DWORD
+        kernel.GetExitCodeProcess.argtypes = [wintypes.HANDLE, ctypes.POINTER(wintypes.DWORD)]
+        kernel.GetExitCodeProcess.restype = wintypes.BOOL
+        kernel.WaitForSingleObject(info.hProcess, 0xFFFFFFFF)
+        code = wintypes.DWORD(1)
+        if not kernel.GetExitCodeProcess(info.hProcess, ctypes.byref(code)):
+            say("管理员进程已结束，但无法读取退出码", "err")
+            return None
+        return int(code.value)
+    finally:
+        kernel.CloseHandle(info.hProcess)
+
+
+def maybe_relaunch_elevated(install, args):
+    """需要提权时重跑并返回其退出码；不需要或已提权时返回 None。"""
+    if (getattr(args, "no_elevate", False) or getattr(args, "elevated_child", False)
+            or DRY or not install_needs_elevation(install) or is_elevated()):
+        return None
+    say("WorkBuddy 装在 Program Files，正在请求管理员权限继续", "warn")
+    try:
+        return relaunch_elevated()
+    except Exception as e:
+        say("自动提权失败：%s" % e, "err")
+        return None
 
 
 def persona_target():
@@ -2084,8 +2177,9 @@ def cmd_apply(install, data, args):
                 say("发现 %d 份会话快照，未删除（不在备份范围，删了还原不回来；"
                     "--clean-spill 清过期 / --purge-spill 清全部）" % len(files), "warn")
 
-    # 回读核对
-    if not DRY and written:
+    # 回读核对：写入列表为空但存在错误时也要跑，否则「没写进去」不会被复查到。
+    total_err = sum(stats[l]["err"] for l in LAYER_IDS)
+    if not DRY and (written or total_err):
         section("回读核对")
         bad = 0
         for p in written:
@@ -2108,6 +2202,7 @@ def cmd_apply(install, data, args):
                 say("闸门未生效 %s" % os.path.basename(p), "err")
         say("复查：%s" % ("全部就绪" if bad == 0 else "%d 处未生效" % bad),
             "ok" if bad == 0 else "err")
+        total_err += bad
 
     if blocked and blocked_lids:
         section("写入受阻")
@@ -2122,7 +2217,8 @@ def cmd_apply(install, data, args):
             say("已经是管理员仍被拒绝，说明不是 UAC 问题：看目录 ACL（属主可能不是 Administrators）、"
                 "安全软件拦截，或客户端正占着目标文件", "warn")
         else:
-            say("当前不是管理员：右键 破甲.bat / 破甲面板.bat → 以管理员身份运行，再跑一次", "warn")
+            say("当前不是管理员，且没有走自动提权（非 Program Files，或用了 --no-elevate）："
+                "右键 破甲.bat / 破甲面板.bat → 以管理员身份运行，再跑一次", "warn")
 
     section("结果")
     table([[lid, LAYER_TITLE[lid], str(stats[lid]["fixed"]),
@@ -2130,7 +2226,6 @@ def cmd_apply(install, data, args):
            for lid in LAYER_IDS],
           ["层", "说明", "改动", "已最新", "忽略", "错误"])
     total_fixed = sum(stats[l]["fixed"] for l in LAYER_IDS)
-    total_err = sum(stats[l]["err"] for l in LAYER_IDS)
     raw("")
     say("完成：改动 %d / 子句 %d / 文件保护 %d / 错误 %d"
         % (total_fixed, clauses_total, guard_total, total_err),
@@ -2147,7 +2242,7 @@ def cmd_apply(install, data, args):
         elif not total_err:
             say("自证：新会话里单独发「%s」，应只回一行「%s」" % (PASSPHRASE, SIGNAL_REPLY), "dot")
 
-    if args.restart and not DRY and install:
+    if args.restart and not DRY and install and not total_err:
         run(["taskkill", "/IM", "WorkBuddy.exe", "/F"], 20)
         time.sleep(2)
         exe = os.path.join(install, "WorkBuddy.exe")
@@ -2701,6 +2796,23 @@ class _Capture(object):
 def run_captured(argv):
     """在进程内跑一次 main()，返回 (exit_code, 输出文本)。"""
     global QUIET, DRY
+    if argv and argv[0] in ("apply", "onekey") and not DRY:
+        # 面板的写盘是这个进程在写。要提权只能另起进程，届时输出不会回到这里，
+        # 所以先在这里拦下并给出明确结论，避免页面显示「成功」却什么都没写。
+        try:
+            probe = build_parser().parse_args(list(argv))
+        except SystemExit:
+            probe = None
+        if probe is not None:
+            install = resolve_install(probe.install_dir)
+            if (install_needs_elevation(install) and not is_elevated()
+                    and not probe.no_elevate):
+                code = maybe_relaunch_elevated(install, probe)
+                if code is None:
+                    return 1, ("需要管理员权限才能改 Program Files，提权没有完成（UAC 被取消或不可用）。\n"
+                               "也可以在管理员终端里直接运行 wbpojia apply。\n")
+                return code, ("已在管理员进程中执行完成，退出码 %d。详细输出见独立控制台窗口；"
+                              "点「状态」可刷新各层结果。\n" % code)
     cap = _Capture()
     old_out, old_err = sys.stdout, sys.stderr
     old_quiet, old_dry = QUIET, DRY
@@ -2791,9 +2903,9 @@ def cmd_panel(install, data, args, open_browser=True):
             perm_warn = ("安装目录写不动（%s），已提权仍被拒 —— 不是 UAC 问题，看目录 ACL 或客户端是否占着文件。"
                          % why)
         else:
-            perm_warn = ("当前进程不是管理员，安装目录写不动（%s）。L1/L2/L3 会全部失败；"
-                         "右键「破甲面板.bat」→ 以管理员身份运行，再打开本页 —— 在浏览器里提权没有用。"
-                         % why)
+            perm_warn = ("当前进程不是管理员，安装目录写不动（%s）。点击操作会请求 UAC 另起管理员进程执行；"
+                         "用 --no-elevate 启动的面板则只能右键「破甲面板.bat」→ 以管理员身份运行。"
+                         "在浏览器里提权没有用。" % why)
     else:
         perm_warn = ""
 
@@ -3043,6 +3155,9 @@ def build_parser():
     p.add_argument("--reset", dest="persona_reset", action="store_true", help="persona：删掉自定义人格")
     p.add_argument("--no-verify", dest="no_verify", action="store_true",
                    help="改 JS 后跳过 node --check 语法校验（不建议）")
+    p.add_argument("--no-elevate", action="store_true",
+                   help="Program Files 下不自动请求 UAC，只以当前权限执行")
+    p.add_argument("--elevated-child", action="store_true", help=argparse.SUPPRESS)
     p.add_argument("--version", action="version", version="wbpojia %s" % __version__)
     return p
 
@@ -3114,6 +3229,9 @@ def main(argv=None):
     if args.cmd == "doctor":
         return cmd_doctor(install, data, args)
     if args.cmd == "apply":
+        elevated = maybe_relaunch_elevated(install, args)
+        if elevated is not None:
+            return elevated
         return cmd_apply(install, data, args)
     if args.cmd == "revert":
         return cmd_revert(install, data)

@@ -13,6 +13,8 @@
   5  revert 逐字节还原到夹具原文
   6  cloudmem 注入后 memory 文件带标记，revert 后回到原档
   7  显式 -i/-d 指错目录时直接失败，不回落到自动探测
+  8  写入受阻：备份失败不硬写、按目录汇总、退出码 1
+  9  提权：开关与程序文件判定、UAC 调用参数与退出码透传
 """
 
 import hashlib
@@ -204,6 +206,124 @@ def build_fixture(root):
     return install, data
 
 
+FAILURE_PROBE = r'''
+import contextlib, importlib.util, io, os, sys, types
+spec = importlib.util.spec_from_file_location("wbpojia_failure_test", sys.argv[1])
+m = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(m)
+sys.path.insert(0, os.getcwd())
+import selftest
+m.IS_WIN = True
+root = sys.argv[2]
+install, data = selftest.build_fixture(root)
+tpl = os.path.join(install, "resources", "app.asar.unpacked", "resources", "templates", "workbuddy-prompt.tpl")
+original = open(tpl, "rb").read()
+args = m.build_parser().parse_args(["apply", "-i", install, "-d", data, "--no-cloudmem", "--no-elevate"])
+m.QUIET = False
+
+
+def invoke():
+    out = io.StringIO()
+    with contextlib.redirect_stdout(out):
+        rc = m.cmd_apply(install, data, args)
+    return rc, out.getvalue()
+
+
+# 备份失败：不硬写原文件，且不再谎报「全部已是最新」，退出码 1。
+def same(a, b):
+    return os.path.normcase(os.path.abspath(a)) == os.path.normcase(os.path.abspath(b))
+m.backup = lambda path: False if same(path, tpl) else True
+m.is_elevated = lambda: False
+rc, out = invoke()
+assert rc == 1, (rc, out)
+assert open(tpl, "rb").read() == original
+assert "提示词靶点全部已是最新" not in out, out
+
+# 目录预检命中：按目录汇总成「写入受阻」，不逐文件刷屏。
+m.backup = lambda path: True
+m.preflight_dirs = lambda paths: {os.path.dirname(p): "[Errno 13] 拒绝访问" for p in paths}
+rc, out = invoke()
+assert rc == 1 and "写入受阻" in out, out
+assert "个文件没写进去" in out, out
+assert out.count("不可写") <= 6, out            # 按目录去重，不是逐文件刷屏
+
+# 已提权仍被拒：提示指向 ACL / 占用，而不是再让用户提权。
+m.is_elevated = lambda: True
+rc, out = invoke()
+assert rc == 1 and "已经是管理员仍被拒绝" in out, out
+assert "右键 破甲.bat" not in out, out
+m.preflight_dirs = lambda paths: {}
+
+# 提权开关：不需要提权 / 已关闭 / 已提权 / 非 Program Files 都不重跑。
+elev_calls = []
+relaunch_impl = m.relaunch_elevated
+m.relaunch_elevated = lambda: elev_calls.append(1) or 7
+m.install_needs_elevation = lambda path: same(path, install)
+m.is_elevated = lambda: False
+os.environ.pop("WBPOJIA_ELEVATED", None)
+args = m.build_parser().parse_args(["apply", "-i", install, "-d", data])
+assert m.maybe_relaunch_elevated(install, args) == 7
+assert m.maybe_relaunch_elevated(os.path.join(root, "elsewhere"), args) is None
+args_off = m.build_parser().parse_args(["apply", "-i", install, "-d", data, "--no-elevate"])
+assert m.maybe_relaunch_elevated(install, args_off) is None
+assert len(elev_calls) == 1, elev_calls
+
+# 面板：需要提权时给出明确结论，而不是假装写成功。
+m.relaunch_elevated = lambda: 5
+code, log = m.run_captured(["apply", "-i", install, "-d", data])
+assert code == 5 and "退出码 5" in log, (code, log)
+m.relaunch_elevated = lambda: None
+code, log = m.run_captured(["apply", "-i", install, "-d", data])
+assert code == 1 and "UAC" in log, (code, log)
+
+# UAC 调用本身：模拟 ShellExecuteExW / 等待 / 取退出码，不真弹窗。
+m.relaunch_elevated = relaunch_impl
+import ctypes as real_ctypes
+seen = {}
+class FakeFunc:
+    def __init__(self, fn): self.fn = fn
+    def __call__(self, *a): return self.fn(*a)
+def shell_execute(ptr):
+    info = ptr._obj
+    seen["verb"] = info.lpVerb
+    seen["params"] = info.lpParameters
+    info.hProcess = 123
+    return 1
+def wait_for_process(handle, timeout):
+    seen["wait"] = (handle, timeout)
+    return 0
+def get_exit_code(handle, ptr):
+    ptr._obj.value = 23
+    return 1
+def close_handle(handle):
+    seen["closed"] = handle
+old_windll, old_get_error = real_ctypes.windll, real_ctypes.GetLastError
+real_ctypes.windll = types.SimpleNamespace(
+    shell32=types.SimpleNamespace(ShellExecuteExW=FakeFunc(shell_execute)),
+    kernel32=types.SimpleNamespace(WaitForSingleObject=FakeFunc(wait_for_process),
+                                   GetExitCodeProcess=FakeFunc(get_exit_code),
+                                   CloseHandle=FakeFunc(close_handle)))
+real_ctypes.GetLastError = lambda: 0
+try:
+    sys.argv = ["wbpojia.py", "apply", "--quiet"]
+    assert m.relaunch_elevated() == 23, seen
+finally:
+    real_ctypes.windll, real_ctypes.GetLastError = old_windll, old_get_error
+assert seen["verb"] == "runas" and "--elevated-child" in seen["params"], seen
+assert seen["wait"] == (123, 0xFFFFFFFF) and seen["closed"] == 123, seen
+print("FAILURE_TESTS_OK")
+'''
+
+
+def failure_probe(root):
+    env = dict(os.environ)
+    env["PYTHONUTF8"] = "1"
+    r = subprocess.run([sys.executable, "-c", FAILURE_PROBE, ENGINE, root],
+                       capture_output=True, cwd=HERE, env=env, timeout=120)
+    out = (r.stdout or b"").decode("utf-8", "replace") + (r.stderr or b"").decode("utf-8", "replace")
+    return r.returncode, out
+
+
 def main():
     root = tempfile.mkdtemp(prefix="wbpojia-selftest-")
     try:
@@ -246,6 +366,14 @@ def main():
         if IS_EXE:
             rc, out = run(["doctor"])
             check("doctor 认出自己是 exe 形态", "单文件 exe" in out, out[:300])
+
+        print("== 1b. 写入受阻与提权分支 ==")
+        if IS_EXE:
+            print("  [--]  打包 exe 的内部模拟由脚本侧同一份断言覆盖，这里跳过")
+        else:
+            rc, out = failure_probe(os.path.join(root, "failure-fixture"))
+            check("备份失败不硬写、按目录汇总、退出码与提权开关正确",
+                  rc == 0 and "FAILURE_TESTS_OK" in out, out[-1800:])
 
         print("== 2. status ==")
         rc, out = run(["status", "-i", install, "-d", data])
