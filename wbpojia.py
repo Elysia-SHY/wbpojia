@@ -2122,7 +2122,7 @@ def cmd_apply(install, data, args):
             say("已经是管理员仍被拒绝，说明不是 UAC 问题：看目录 ACL（属主可能不是 Administrators）、"
                 "安全软件拦截，或客户端正占着目标文件", "warn")
         else:
-            say("当前不是管理员：右键 破甲.bat → 以管理员身份运行，再跑一次", "warn")
+            say("当前不是管理员：右键 破甲.bat / 破甲面板.bat → 以管理员身份运行，再跑一次", "warn")
 
     section("结果")
     table([[lid, LAYER_TITLE[lid], str(stats[lid]["fixed"]),
@@ -2474,6 +2474,7 @@ textarea:focus{outline:none;border-color:var(--accent)}
 .row{display:flex;justify-content:space-between;align-items:center;gap:12px;
      margin-bottom:10px;flex-wrap:wrap}
 .hint{color:var(--dim);font-size:12px}
+#perm{display:none;border-color:var(--warn);color:var(--warn);font-size:13px;line-height:1.6}
 </style></head><body>
 <header>
   <h1>WorkBuddy 破甲</h1>
@@ -2485,6 +2486,7 @@ textarea:focus{outline:none;border-color:var(--accent)}
     <div><b>数据目录</b><span id="p-data">探测中…</span></div>
     <div><b>人格</b><span id="p-persona">探测中…</span></div>
   </div>
+  <div class="card" id="perm"></div>
 
   <div class="card">
     <div class="row"><strong>六层靶点</strong><span class="hint" id="stamp"></span></div>
@@ -2534,6 +2536,9 @@ async function refresh(){
     document.getElementById("p-install").textContent = d.install || "(未找到)";
     document.getElementById("p-data").textContent    = d.data    || "(未找到)";
     document.getElementById("p-persona").textContent = d.persona + "  " + d.persona_len + " 字";
+    const pm = document.getElementById("perm");
+    pm.style.display = d.perm ? "block" : "none";
+    pm.textContent = d.perm || "";
     document.getElementById("stamp").textContent = d.form + " · " + d.when;
     document.getElementById("layers").innerHTML = d.layers.map(L =>
       "<tr><td>" + L.id + "</td><td>" + esc(L.title) + "</td><td>" + L.ok + "/" + L.total +
@@ -2777,6 +2782,21 @@ def cmd_panel(install, data, args, open_browser=True):
                     pass
             return 0
 
+    # 面板里的写盘就是这个进程在写：页面提不了权，先把令牌状态摆到页面上。
+    if install:
+        writable, why = probe_dir(install)
+        if writable:
+            perm_warn = ""
+        elif is_elevated():
+            perm_warn = ("安装目录写不动（%s），已提权仍被拒 —— 不是 UAC 问题，看目录 ACL 或客户端是否占着文件。"
+                         % why)
+        else:
+            perm_warn = ("当前进程不是管理员，安装目录写不动（%s）。L1/L2/L3 会全部失败；"
+                         "右键「破甲面板.bat」→ 以管理员身份运行，再打开本页 —— 在浏览器里提权没有用。"
+                         % why)
+    else:
+        perm_warn = ""
+
     def snapshot():
         layers, src, plen = layer_report(install, data)
         return {
@@ -2784,6 +2804,7 @@ def cmd_panel(install, data, args, open_browser=True):
             "persona": src, "persona_len": plen,
             "form": "单文件 exe" if FROZEN else "python 脚本",
             "when": time.strftime("%H:%M:%S"),
+            "perm": perm_warn,
             "layers": layers,
             "actions": [{"name": k, "label": v[0]} for k, v in PANEL_ACTIONS.items()],
         }
