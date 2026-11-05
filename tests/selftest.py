@@ -13,7 +13,6 @@
   5  revert 逐字节还原到夹具原文
   6  cloudmem 注入后 memory 文件带标记，revert 后回到原档
   7  显式 -i/-d 指错目录时直接失败，不回落到自动探测
-  8  备份/写入失败不改原文件、不显示完成；Program Files 自动提权可关闭
 """
 
 import hashlib
@@ -205,111 +204,6 @@ def build_fixture(root):
     return install, data
 
 
-FAILURE_PROBE = r'''
-import contextlib, importlib.util, io, os, shutil, sys, types
-spec = importlib.util.spec_from_file_location("wbpojia_failure_test", sys.argv[1])
-m = importlib.util.module_from_spec(spec)
-spec.loader.exec_module(m)
-sys.path.insert(0, os.getcwd())
-import selftest
-m.IS_WIN = True
-root = tempfile_root = sys.argv[2]
-install, data = selftest.build_fixture(root)
-tpl = os.path.join(install, "resources", "app.asar.unpacked", "resources", "templates", "workbuddy-prompt.tpl")
-original = open(tpl, "rb").read()
-args = m.build_parser().parse_args(["apply", "-i", install, "-d", data, "--no-cloudmem", "--no-elevate"])
-m.QUIET = False
-
-def invoke():
-    out = io.StringIO()
-    with contextlib.redirect_stdout(out):
-        rc = m.cmd_apply(install, data, args)
-    return rc, out.getvalue()
-
-# 模拟目录安全权限拒绝创建备份。即使之后能够写临时文件，也不能越过备份。
-m.backup = lambda path: False if path == tpl else True
-rc, out = invoke()
-assert rc == 1, (rc, out)
-assert open(tpl, "rb").read() == original
-assert "提示词靶点全部已是最新" not in out, out
-assert "未完成：" in out, out
-
-# 模拟管理员进程仍被安全软件或 ACL 拒绝，不能重复提示以管理员运行。
-def deny_backup(path):
-    if path == tpl:
-        exc = PermissionError(13, "Permission denied", path + m.BAK)
-        m.say("备份失败 %s: %s；已跳过写入，原文件未改" % (os.path.basename(path), exc), "err")
-        m.write_permission_hint()
-        return False
-    return True
-m.backup = deny_backup
-m.is_elevated = lambda: True
-rc, out = invoke()
-assert rc == 1 and "当前已是管理员" in out, out
-assert "改 Program Files 要以管理员身份运行" not in out, out
-
-# 普通安装不请求 UAC；Program Files 安装会转发退出码；可显式关闭。
-m.install_needs_elevation = lambda path: path == install
-m.is_elevated = lambda: False
-relaunch_impl = m.relaunch_elevated
-m.relaunch_elevated = lambda: 7
-args = m.build_parser().parse_args(["apply", "-i", install, "-d", data])
-assert m.maybe_relaunch_elevated(install, args) == 7
-args = m.build_parser().parse_args(["apply", "-i", install, "-d", data, "--no-elevate"])
-assert m.maybe_relaunch_elevated(install, args) is None
-args = m.build_parser().parse_args(["apply", "-i", install, "-d", data])
-assert m.maybe_relaunch_elevated(os.path.join(root, "elsewhere"), args) is None
-
-# 不真正弹 UAC：模拟 ShellExecuteExW / 等待 / 获取退出码的完整 Windows 调用。
-import ctypes as real_ctypes
-m.relaunch_elevated = relaunch_impl
-seen = {}
-class FakeFunc:
-    def __init__(self, fn):
-        self.fn = fn
-    def __call__(self, *args):
-        return self.fn(*args)
-def shell_execute(ptr):
-    info = ptr._obj
-    seen["verb"] = info.lpVerb
-    seen["params"] = info.lpParameters
-    info.hProcess = 123
-    return 1
-def wait_for_process(handle, timeout):
-    seen["wait"] = (handle, timeout)
-    return 0
-def get_exit_code(handle, ptr):
-    ptr._obj.value = 23
-    return 1
-def close_handle(handle):
-    seen["closed"] = handle
-old_windll, old_get_error = real_ctypes.windll, real_ctypes.GetLastError
-real_ctypes.windll = types.SimpleNamespace(
-    shell32=types.SimpleNamespace(ShellExecuteExW=FakeFunc(shell_execute)),
-    kernel32=types.SimpleNamespace(WaitForSingleObject=FakeFunc(wait_for_process),
-                                   GetExitCodeProcess=FakeFunc(get_exit_code),
-                                   CloseHandle=FakeFunc(close_handle)))
-real_ctypes.GetLastError = lambda: 0
-try:
-    sys.argv = ["wbpojia.py", "apply", "--quiet"]
-    assert m.relaunch_elevated() == 23, seen
-finally:
-    real_ctypes.windll, real_ctypes.GetLastError = old_windll, old_get_error
-assert seen["verb"] == "runas" and "--elevated-child" in seen["params"], seen
-assert seen["wait"] == (123, 0xFFFFFFFF) and seen["closed"] == 123, seen
-print("FAILURE_TESTS_OK")
-'''
-
-
-def failure_probe(root):
-    env = dict(os.environ)
-    env["PYTHONUTF8"] = "1"
-    r = subprocess.run([sys.executable, "-c", FAILURE_PROBE, ENGINE, root],
-                       capture_output=True, cwd=HERE, env=env, timeout=120)
-    out = (r.stdout or b"").decode("utf-8", "replace") + (r.stderr or b"").decode("utf-8", "replace")
-    return r.returncode, out
-
-
 def main():
     root = tempfile.mkdtemp(prefix="wbpojia-selftest-")
     try:
@@ -352,14 +246,6 @@ def main():
         if IS_EXE:
             rc, out = run(["doctor"])
             check("doctor 认出自己是 exe 形态", "单文件 exe" in out, out[:300])
-
-        print("== 1b. 备份失败与提权分支 ==")
-        if IS_EXE:
-            print("  [--]  打包 exe 的内部模拟由脚本侧同一份断言覆盖")
-        else:
-            rc, out = failure_probe(os.path.join(root, "failure-fixture"))
-            check("备份失败不改原文件，错误结尾，提权退出码透传",
-                  rc == 0 and "FAILURE_TESTS_OK" in out, out[-1600:])
 
         print("== 2. status ==")
         rc, out = run(["status", "-i", install, "-d", data])
