@@ -112,8 +112,8 @@ scoop bucket rm wbpojia  # 只有建过本地 bucket 才需要
 
 ```powershell
 # 从 Release 附件算（curl 要写全路径，别落在当前目录）
-curl.exe -L -o "$env:TEMP\wbpojia-v2.3.0-win64.zip" "https://github.com/Elysia-SHY/wbpojia/releases/download/v2.3.0/wbpojia-v2.3.0-win64.zip"
-(Get-FileHash -Algorithm SHA256 -LiteralPath "$env:TEMP\wbpojia-v2.3.0-win64.zip").Hash.ToLower()
+curl.exe -L -o "$env:TEMP\wbpojia-v2.3.1-win64.zip" "https://github.com/Elysia-SHY/wbpojia/releases/download/v2.3.1/wbpojia-v2.3.1-win64.zip"
+(Get-FileHash -Algorithm SHA256 -LiteralPath "$env:TEMP\wbpojia-v2.3.1-win64.zip").Hash.ToLower()
 ```
 
 偷懒的话不用下载：Release 附件里的 `SHA256SUMS.txt` 就有 zip 那一行，直接抄进来即可（同一份哈希）。
@@ -125,10 +125,10 @@ curl.exe -L -o "$env:TEMP\wbpojia-v2.3.0-win64.zip" "https://github.com/Elysia-S
 只需要改这几处（`autoupdate` 里的 `$version` 不用动）：
 
 - `version`
-- `architecture.64bit.url` 里的两处 `2.3.0`
+- `architecture.64bit.url` 里的两处 `2.3.1`
 - `architecture.64bit.hash`
 
-`checkver` 用 GitHub releases 取最新 tag（本仓库 tag 形如 `v2.3.0`，Scoop 会自动去掉 `v`），`autoupdate` 负责自动拼新 URL，建了 bucket 之后 `scoop update` 就能跟上，不需要手改。
+`checkver` 用 GitHub releases 取最新 tag（本仓库 tag 形如 `v2.3.1`，Scoop 会自动去掉 `v`），`autoupdate` 负责自动拼新 URL，建了 bucket 之后 `scoop update` 就能跟上，不需要手改。
 
 ### 5.3 换 sha 之后它说缓存还是旧的
 
