@@ -34,7 +34,7 @@ Two enforcement points are outside patch range: the native sandbox (`cli\vendor\
 
 ## Installation
 
-Download `wbpojia-v2.3.0-win64.zip` from [Releases](https://github.com/Elysia-SHY/wbpojia/releases/latest) and extract it.
+Download `wbpojia-v2.3.1-win64.zip` from [Releases](https://github.com/Elysia-SHY/wbpojia/releases/latest) and extract it.
 
 Or:
 

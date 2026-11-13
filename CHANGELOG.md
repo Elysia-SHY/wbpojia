@@ -1,5 +1,11 @@
 # 更新日志
 
+## v2.3.1 — 2026-11-13
+
+### 修正
+
+- WorkBuddy 装在非系统盘（如 `D:\Program Files\WorkBuddy`）时，`apply` 直接报「内部错误：ValueError: Paths don't have the same drive」。原因是提权判定用 `os.path.commonpath` 比较不同盘符的路径。现在跨盘按「不受系统 UAC 保护」处理，正常落盘，并补了对应回归用例。
+
 ## v2.3.0 — 2026-11-05
 
 ### 合并

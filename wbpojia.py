@@ -41,7 +41,7 @@ import tempfile
 import time
 import unicodedata
 
-__version__ = "2.3"
+__version__ = "2.3.1"
 
 IS_WIN = (os.name == "nt")
 
@@ -608,8 +608,13 @@ def install_needs_elevation(install):
         if not root:
             continue
         base = os.path.normcase(os.path.abspath(root))
-        if os.path.commonpath((target, base)) == base:
-            return True
+        try:
+            if os.path.commonpath((target, base)) == base:
+                return True
+        except ValueError:
+            # 安装目录与 Program Files 不同盘（如 D:\Program Files\...），
+            # commonpath 会抛 ValueError；这种目录不受系统 UAC 保护，按不需提权处理。
+            continue
     return False
 
 

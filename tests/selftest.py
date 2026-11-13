@@ -214,6 +214,7 @@ spec.loader.exec_module(m)
 sys.path.insert(0, os.getcwd())
 import selftest
 m.IS_WIN = True
+_orig_needs_elevation = m.install_needs_elevation
 root = sys.argv[2]
 install, data = selftest.build_fixture(root)
 tpl = os.path.join(install, "resources", "app.asar.unpacked", "resources", "templates", "workbuddy-prompt.tpl")
@@ -275,6 +276,15 @@ assert code == 5 and "退出码 5" in log, (code, log)
 m.relaunch_elevated = lambda: None
 code, log = m.run_captured(["apply", "-i", install, "-d", data])
 assert code == 1 and "UAC" in log, (code, log)
+
+# 跨盘符安装目录（如 D:\Program Files\...）：commonpath 不得抛 ValueError。
+needs_elevation_impl = _orig_needs_elevation
+try:
+    assert needs_elevation_impl(os.environ.get("ProgramFiles", r"C:\Program Files") + r"\WorkBuddy") is True
+    other_drive = "D:" if os.environ.get("SystemDrive", "C:").upper() != "D:" else "E:"
+    assert needs_elevation_impl(other_drive + r"\Program Files\WorkBuddy") is False
+finally:
+    m.install_needs_elevation = needs_elevation_impl
 
 # UAC 调用本身：模拟 ShellExecuteExW / 等待 / 取退出码，不真弹窗。
 m.relaunch_elevated = relaunch_impl

@@ -41,7 +41,7 @@ JS 写入前执行 `node --check` 语法校验，未通过则跳过该文件。�
 
 ### exe
 
-从 [Releases](https://github.com/Elysia-SHY/wbpojia/releases/latest) 下载 `wbpojia-v2.3.0-win64.zip`，解压至任意目录。
+从 [Releases](https://github.com/Elysia-SHY/wbpojia/releases/latest) 下载 `wbpojia-v2.3.1-win64.zip`，解压至任意目录。
 
 包内容：
 
